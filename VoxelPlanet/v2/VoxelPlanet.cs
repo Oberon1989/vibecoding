@@ -2,7 +2,8 @@ using UnityEngine;
 
 [DisallowMultipleComponent]
 [RequireComponent(typeof(VoxelGpuHierarchy))]
-public class VoxelPlanet : MonoBehaviour
+[RequireComponent(typeof(VoxelPlanetGpuRenderer))]
+public sealed class VoxelPlanet : MonoBehaviour
 {
     [Header("Planet Definition")]
     [SerializeField] private VoxelPlanetDefinition definition;
@@ -10,17 +11,16 @@ public class VoxelPlanet : MonoBehaviour
     [Header("LOD Target")]
     [SerializeField] private Transform lodTarget;
 
-    [Header("GPU Hierarchy")]
+    [Header("Runtime")]
     [SerializeField] private VoxelGpuHierarchy gpuHierarchy;
 
-    public VoxelPlanetDefinition Definition =>
-        definition;
+    private bool running;
 
-    public Transform LodTarget =>
-        lodTarget;
+    public VoxelPlanetDefinition Definition => definition;
 
-    public VoxelGpuHierarchy GpuHierarchy =>
-        gpuHierarchy;
+    public Transform LodTarget => lodTarget;
+
+    public VoxelGpuHierarchy GpuHierarchy => gpuHierarchy;
 
     public Vector3 PlanetCenter =>
         definition != null
@@ -30,23 +30,23 @@ public class VoxelPlanet : MonoBehaviour
     public float PlanetRadius =>
         definition != null
             ? definition.PlanetRadius
-            : 0.0f;
-
-    private bool running;
+            : 0f;
 
     private void Reset()
     {
-        gpuHierarchy =
-            GetComponent<VoxelGpuHierarchy>();
+        gpuHierarchy = GetComponent<VoxelGpuHierarchy>();
+
+        if (lodTarget == null && Camera.main != null)
+            lodTarget = Camera.main.transform;
     }
 
     private void Awake()
     {
         if (gpuHierarchy == null)
-        {
-            gpuHierarchy =
-                GetComponent<VoxelGpuHierarchy>();
-        }
+            gpuHierarchy = GetComponent<VoxelGpuHierarchy>();
+
+        if (lodTarget == null && Camera.main != null)
+            lodTarget = Camera.main.transform;
 
         ValidateReferences();
     }
@@ -56,24 +56,12 @@ public class VoxelPlanet : MonoBehaviour
         if (!Application.isPlaying)
             return;
 
-        if (definition == null ||
-            gpuHierarchy == null)
-        {
+        if (definition == null || gpuHierarchy == null)
             return;
-        }
 
-        Vector3 initialTargetPosition =
-            ResolveLodTargetPosition();
-
-        running =
-            gpuHierarchy.Initialize(
-                definition.PlanetCenter,
-                definition.PlanetRadius,
-                definition.NoiseSeed,
-                definition.NoiseFrequency,
-                definition.NoiseHeight,
-                initialTargetPosition
-            );
+        running = gpuHierarchy.Initialize(
+            definition,
+            ResolveLodTargetPosition());
     }
 
     private void OnDisable()
@@ -81,23 +69,16 @@ public class VoxelPlanet : MonoBehaviour
         running = false;
 
         if (gpuHierarchy != null)
-        {
             gpuHierarchy.Shutdown();
-        }
     }
 
     private void Update()
     {
-        if (!running ||
-            gpuHierarchy == null ||
-            !gpuHierarchy.IsInitialized)
-        {
+        if (!running || gpuHierarchy == null)
             return;
-        }
 
         gpuHierarchy.SetLodTargetPosition(
-            ResolveLodTargetPosition()
-        );
+            ResolveLodTargetPosition());
 
         gpuHierarchy.Tick();
     }
@@ -105,14 +86,10 @@ public class VoxelPlanet : MonoBehaviour
     private Vector3 ResolveLodTargetPosition()
     {
         if (lodTarget != null)
-        {
             return lodTarget.position;
-        }
 
         if (Camera.main != null)
-        {
             return Camera.main.transform.position;
-        }
 
         return PlanetCenter;
     }
@@ -124,18 +101,15 @@ public class VoxelPlanet : MonoBehaviour
             Debug.LogError(
                 $"[{nameof(VoxelPlanet)}] " +
                 "VoxelPlanetDefinition is not assigned.",
-                this
-            );
+                this);
         }
 
         if (gpuHierarchy == null)
         {
             Debug.LogError(
                 $"[{nameof(VoxelPlanet)}] " +
-                "VoxelGpuHierarchy is not assigned " +
-                "and was not found on this GameObject.",
-                this
-            );
+                "VoxelGpuHierarchy is missing.",
+                this);
         }
     }
 
@@ -143,11 +117,7 @@ public class VoxelPlanet : MonoBehaviour
     private void OnValidate()
     {
         if (gpuHierarchy == null)
-        {
-            gpuHierarchy =
-                GetComponent<VoxelGpuHierarchy>();
-        }
+            gpuHierarchy = GetComponent<VoxelGpuHierarchy>();
     }
 #endif
 }
-
