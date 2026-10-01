@@ -29,7 +29,7 @@
 #include "VoxelDensityQEF.hlsl"
 #include "VoxelDensityTopology.hlsl"
 #include "VoxelOctree.hlsl"
-#include "VoxelDensityMeshV1.hlsl"
+#include "VoxelDensityMesh.hlsl"
 
 
 // ============================================================
