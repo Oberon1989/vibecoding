@@ -1062,6 +1062,15 @@ bool V1BuildEdgePolygon(
     }
 
 
+    // An incomplete incident-cell stencil must never be triangulated.
+    // Emitting the remaining three vertices can create a long/crossed
+    // triangle because they are not a complete edge-cycle.
+    if (polygon.missingVertices > 0u)
+    {
+        return false;
+    }
+
+
     if (polygon.count < 3u)
     {
         InterlockedOr(
