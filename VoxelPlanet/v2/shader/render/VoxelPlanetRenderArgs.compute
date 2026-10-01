@@ -1,0 +1,15 @@
+#pragma kernel CSBuildRenderArgs
+
+StructuredBuffer<uint> IndexCountBuffer;
+RWStructuredBuffer<uint> RenderArgsBuffer;
+
+[numthreads(1, 1, 1)]
+void CSBuildRenderArgs(uint3 id : SV_DispatchThreadID)
+{
+    uint indexCount = IndexCountBuffer[0];
+
+    RenderArgsBuffer[0] = indexCount;
+    RenderArgsBuffer[1] = indexCount > 0u ? 1u : 0u;
+    RenderArgsBuffer[2] = 0u;
+    RenderArgsBuffer[3] = 0u;
+}
