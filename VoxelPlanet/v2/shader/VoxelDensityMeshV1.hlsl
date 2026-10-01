@@ -351,9 +351,16 @@ bool V1ResolveIncidentCell(
         node.canonicalOrigin;
 
 
+    // Canonical sample coordinates can sit one or more finest-lattice
+    // steps outside a coarser leaf when resolving an incident cell.
+    // HLSL integer division truncates toward zero, but cell coordinates
+    // here require mathematical floor division so that negative offsets
+    // stay on the correct side of the leaf boundary.
     int3 cell =
-        relative /
-        canonicalStep;
+        int3(
+            floor((float3) relative /
+                  (float) canonicalStep)
+        );
 
 
     if (any(cell < 0) ||
