@@ -210,7 +210,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoxelPlanetGpuRenderer
   planet: {fileID: 103722959}
-  renderShader: {fileID: 4800000, guid: 49fb7b5a696cbac43b441655b71f5262, type: 3}
+  renderShader: {fileID: 0}
   baseColor: {r: 0.45, g: 0.65, b: 0.85, a: 1}
   noiseColor: {r: 0.16, g: 0.28, b: 0.36, a: 1}
   noiseFeatureSize: 600
