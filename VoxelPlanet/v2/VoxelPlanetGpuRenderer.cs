@@ -1,468 +1,604 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[DisallowMultipleComponent]
-[RequireComponent(typeof(VoxelPlanet))]
-public class VoxelPlanetGpuRenderer : MonoBehaviour
+public enum VoxelCubeFace : byte
 {
-    [Header("Source")]
-    [SerializeField] private VoxelPlanet planet;
+    PositiveX,
+    NegativeX,
+    PositiveY,
+    NegativeY,
+    PositiveZ,
+    NegativeZ
+}
 
-    [Header("Render")]
-    [SerializeField] private Shader renderShader;
-    [SerializeField]
-    private Color baseColor =
-        new Color(0.45f, 0.65f, 0.85f, 1.0f);
+public struct VoxelPatchKey
+{
+    public VoxelCubeFace Face;
+    public int Lod;
+    public int X;
+    public int Y;
 
-    [Header("Procedural Surface")]
-    [SerializeField]
-    private Color noiseColor =
-        new Color(0.16f, 0.28f, 0.36f, 1.0f);
-
-    [SerializeField, Min(1.0f)]
-    private float noiseFeatureSize = 250.0f;
-
-    [SerializeField, Range(0.0f, 1.0f)]
-    private float noiseStrength = 0.75f;
-
-    [Header("Lighting")]
-    [SerializeField] private Light directionalLight;
-
-    [SerializeField] private int renderLayer = 0;
-
-    [Header("Debug Bounds")]
-    [SerializeField] private float boundsPadding = 4.0f;
-
-    [Header("Indirect Arguments (VoxelPlanetRenderArgs.compute)")]
-    [SerializeField] private ComputeShader renderArgsShader;
-
-    private VoxelGpuHierarchy hierarchy;
-
-    private Material renderMaterial;
-    private MaterialPropertyBlock materialProperties;
-    private GraphicsBuffer renderArgsBuffer;
-
-    private int buildRenderArgsKernel;
-
-    private Bounds worldBounds;
-
-    private bool initialized;
-
-    private static readonly int VertexBufferId =
-        Shader.PropertyToID("_VertexBuffer");
-
-    private static readonly int NormalBufferId =
-        Shader.PropertyToID("_NormalBuffer");
-
-    private static readonly int IndexBufferId =
-        Shader.PropertyToID("_IndexBuffer");
-
-    private static readonly int BaseColorId =
-        Shader.PropertyToID("_BaseColor");
-
-    private static readonly int NoiseColorId =
-        Shader.PropertyToID("_NoiseColor");
-
-    private static readonly int PlanetCenterId =
-        Shader.PropertyToID("_PlanetCenter");
-
-    private static readonly int NoiseFrequencyId =
-        Shader.PropertyToID("_NoiseFrequency");
-
-    private static readonly int NoiseStrengthId =
-        Shader.PropertyToID("_NoiseStrength");
-
-    private static readonly int LightDirectionId =
-        Shader.PropertyToID("_LightDirection");
-
-    private static readonly int LightColorId =
-        Shader.PropertyToID("_LightColor");
-
-    private static readonly int AmbientColorId =
-        Shader.PropertyToID("_AmbientColor");
-
-    private void Reset()
+    public VoxelPatchKey(VoxelCubeFace face, int lod, int x, int y)
     {
-        planet =
-            GetComponent<VoxelPlanet>();
+        Face = face;
+        Lod = lod;
+        X = x;
+        Y = y;
     }
 
-    private void Awake()
+    public override bool Equals(object obj)
     {
-        if (planet == null)
-        {
-            planet =
-                GetComponent<VoxelPlanet>();
-        }
-
-        ResolveDirectionalLight();
+        if (!(obj is VoxelPatchKey)) return false;
+        VoxelPatchKey other = (VoxelPatchKey)obj;
+        return Face == other.Face && Lod == other.Lod &&
+               X == other.X && Y == other.Y;
     }
 
-    private void OnEnable()
+    public override int GetHashCode()
     {
-        InitializeRenderer();
-    }
-
-    private void OnDisable()
-    {
-        ShutdownRenderer();
-    }
-
-    private void OnDestroy()
-    {
-        ShutdownRenderer();
-    }
-
-    private void LateUpdate()
-    {
-        if (!initialized)
-            return;
-
-        if (planet == null)
-            return;
-
-        hierarchy =
-            planet.GpuHierarchy;
-
-        if (hierarchy == null)
-            return;
-
-        if (!hierarchy.IsInitialized)
-            return;
-
-        if (hierarchy.IndexBuffer == null ||
-            hierarchy.VertexBuffer == null ||
-            hierarchy.NormalBuffer == null ||
-            hierarchy.IndexCountBuffer == null)
+        unchecked
         {
-            return;
+            int hash = (int)Face;
+            hash = hash * 397 ^ Lod;
+            hash = hash * 397 ^ X;
+            hash = hash * 397 ^ Y;
+            return hash;
         }
-
-        UpdateWorldBounds();
-
-        BuildRenderArguments();
-
-        RenderPlanet();
-    }
-
-    private void InitializeRenderer()
-    {
-        if (initialized)
-            return;
-
-        if (planet == null)
-        {
-            Debug.LogError(
-                $"[{nameof(VoxelPlanetGpuRenderer)}] " +
-                "VoxelPlanet is not assigned.",
-                this
-            );
-
-            return;
-        }
-
-        hierarchy =
-            planet.GpuHierarchy;
-
-        if (hierarchy == null)
-        {
-            Debug.LogError(
-                $"[{nameof(VoxelPlanetGpuRenderer)}] " +
-                "VoxelGpuHierarchy was not found through VoxelPlanet.",
-                this
-            );
-
-            return;
-        }
-
-        if (renderShader == null)
-        {
-            Debug.LogError(
-                $"[{nameof(VoxelPlanetGpuRenderer)}] " +
-                "Render Shader is not assigned.",
-                this
-            );
-
-            return;
-        }
-
-        if (renderArgsShader == null)
-        {
-            Debug.LogError(
-                $"[{nameof(VoxelPlanetGpuRenderer)}] " +
-                "Render Args Compute Shader is not assigned. " +
-                "Assign VoxelPlanetRenderArgs.compute here; " +
-                "VoxelDensityV1.compute belongs on VoxelGpuHierarchy.",
-                this
-            );
-
-            return;
-        }
-
-        if (!renderArgsShader.HasKernel("CSBuildRenderArgs"))
-        {
-            Debug.LogError(
-                $"[{nameof(VoxelPlanetGpuRenderer)}] " +
-                $"'{renderArgsShader.name}' has no CSBuildRenderArgs kernel. " +
-                "Assign Assets/VoxelPlanet/v2/ComputeShaders/" +
-                "VoxelPlanetRenderArgs.compute to Render Args Compute Shader. " +
-                "Keep VoxelDensityV1.compute assigned to VoxelGpuHierarchy.",
-                this
-            );
-
-            return;
-        }
-
-        buildRenderArgsKernel =
-            renderArgsShader.FindKernel(
-                "CSBuildRenderArgs"
-            );
-
-        renderMaterial =
-            new Material(
-                renderShader
-            );
-
-        renderMaterial.name =
-            $"{gameObject.name}_VoxelPlanetGpuMaterial";
-
-        renderMaterial.enableInstancing = true;
-
-        materialProperties =
-            new MaterialPropertyBlock();
-
-        renderArgsBuffer =
-            new GraphicsBuffer(
-                GraphicsBuffer.Target.IndirectArguments,
-                1,
-                GraphicsBuffer.IndirectDrawArgs.size
-            );
-
-        UpdateWorldBounds();
-
-        initialized = true;
-    }
-
-    private void BuildRenderArguments()
-    {
-        renderArgsShader.SetBuffer(
-            buildRenderArgsKernel,
-            "IndexCountBuffer",
-            hierarchy.IndexCountBuffer
-        );
-
-        renderArgsShader.SetBuffer(
-            buildRenderArgsKernel,
-            "RenderArgsBuffer",
-            renderArgsBuffer
-        );
-
-        renderArgsShader.Dispatch(
-            buildRenderArgsKernel,
-            1,
-            1,
-            1
-        );
-    }
-
-    private void RenderPlanet()
-    {
-        materialProperties.Clear();
-
-        materialProperties.SetBuffer(
-            VertexBufferId,
-            hierarchy.VertexBuffer
-        );
-
-        materialProperties.SetBuffer(
-            NormalBufferId,
-            hierarchy.NormalBuffer
-        );
-
-        materialProperties.SetBuffer(
-            IndexBufferId,
-            hierarchy.IndexBuffer
-        );
-
-        materialProperties.SetColor(
-            BaseColorId,
-            baseColor
-        );
-
-        materialProperties.SetColor(
-            NoiseColorId,
-            noiseColor
-        );
-
-        materialProperties.SetVector(
-            PlanetCenterId,
-            hierarchy.PlanetCenter
-        );
-
-        materialProperties.SetFloat(
-            NoiseFrequencyId,
-            1.0f / Mathf.Max(1.0f, noiseFeatureSize)
-        );
-
-        materialProperties.SetFloat(
-            NoiseStrengthId,
-            noiseStrength
-        );
-
-        Light sun = directionalLight;
-        Vector3 lightDirection = sun != null
-            ? -sun.transform.forward
-            : new Vector3(0.4f, 0.8f, 0.3f).normalized;
-        Color lightColor = sun != null
-            ? sun.color * Mathf.Clamp01(sun.intensity)
-            : Color.white;
-
-        materialProperties.SetVector(
-            LightDirectionId,
-            lightDirection
-        );
-
-        materialProperties.SetColor(
-            LightColorId,
-            lightColor
-        );
-
-        materialProperties.SetColor(
-            AmbientColorId,
-            RenderSettings.ambientLight
-        );
-
-        RenderParams renderParams =
-            new RenderParams(
-                renderMaterial
-            );
-
-        renderParams.worldBounds =
-            worldBounds;
-
-        renderParams.matProps =
-            materialProperties;
-
-        renderParams.layer =
-            renderLayer;
-
-        renderParams.shadowCastingMode =
-            ShadowCastingMode.Off;
-
-        renderParams.receiveShadows =
-            false;
-
-        Graphics.RenderPrimitivesIndirect(
-            renderParams,
-            MeshTopology.Triangles,
-            renderArgsBuffer,
-            1,
-            0
-        );
-    }
-
-    private void ResolveDirectionalLight()
-    {
-        if (directionalLight != null)
-            return;
-
-        directionalLight = RenderSettings.sun;
-        if (directionalLight != null)
-            return;
-
-        Light[] sceneLights =
-            FindObjectsByType<Light>(FindObjectsSortMode.None);
-
-        for (int i = 0; i < sceneLights.Length; i++)
-        {
-            if (sceneLights[i].isActiveAndEnabled &&
-                sceneLights[i].type == LightType.Directional)
-            {
-                directionalLight = sceneLights[i];
-                return;
-            }
-        }
-    }
-
-    private void UpdateWorldBounds()
-    {
-        if (hierarchy != null && hierarchy.IsInitialized)
-        {
-            float activeRadius = hierarchy.PlanetRadius;
-            float activeNoiseHeight = Mathf.Abs(hierarchy.PlanetNoiseHeight);
-            float activeDiameter =
-                activeRadius * 2.0f +
-                activeNoiseHeight * 2.0f +
-                boundsPadding;
-
-            worldBounds = new Bounds(
-                hierarchy.PlanetCenter,
-                Vector3.one * activeDiameter
-            );
-            return;
-        }
-
-        if (planet == null ||
-            planet.Definition == null)
-        {
-            worldBounds =
-                new Bounds(
-                    transform.position,
-                    Vector3.one * 100000.0f
-                );
-
-            return;
-        }
-
-        Vector3 center =
-            planet.Definition.PlanetCenter;
-
-        float radius =
-            planet.Definition.PlanetRadius;
-
-        float noiseHeight =
-            Mathf.Abs(
-                planet.Definition.NoiseHeight
-            );
-
-        float diameter =
-            radius * 2.0f +
-            noiseHeight * 2.0f +
-            boundsPadding;
-
-        worldBounds =
-            new Bounds(
-                center,
-                Vector3.one * diameter
-            );
-    }
-
-    private void ShutdownRenderer()
-    {
-        initialized = false;
-
-        if (renderArgsBuffer != null)
-        {
-            renderArgsBuffer.Release();
-            renderArgsBuffer = null;
-        }
-
-        if (renderMaterial != null)
-        {
-            if (Application.isPlaying)
-            {
-                Destroy(renderMaterial);
-            }
-            else
-            {
-                DestroyImmediate(renderMaterial);
-            }
-
-            renderMaterial = null;
-        }
-
-        materialProperties = null;
-        hierarchy = null;
     }
 }
 
+[DisallowMultipleComponent]
+public sealed class VoxelPlanetGpuRenderer : MonoBehaviour
+{
+    [Header("Rendering")]
+    [SerializeField] private Shader renderShader;
+    [SerializeField] private Color baseColor = new Color(0.34f, 0.50f, 0.28f, 1f);
+    [SerializeField] private int renderLayer;
+    [SerializeField] private bool castShadows = true;
+
+    private readonly Dictionary<VoxelPatchKey, PatchView> patches =
+        new Dictionary<VoxelPatchKey, PatchView>();
+
+    private readonly List<PatchView> collisionCandidates =
+        new List<PatchView>(128);
+
+    private Material material;
+    private VoxelPlanetDefinition definition;
+    private Vector3 planetCenter;
+    private Transform patchRoot;
+
+    public IReadOnlyCollection<PatchView> ActivePatches => patches.Values;
+
+    public void Initialize(VoxelPlanetDefinition newDefinition, Transform owner)
+    {
+        definition = newDefinition;
+        planetCenter = definition.PlanetCenter;
+
+        EnsurePatchRoot(owner);
+        EnsureMaterial();
+        Clear();
+    }
+
+    public PatchView CreatePatch(VoxelPatchKey key)
+    {
+        if (patches.TryGetValue(key, out PatchView existing))
+            return existing;
+
+        PatchView view = new PatchView(key);
+        view.GameObject.transform.SetParent(patchRoot, false);
+        view.GameObject.layer = renderLayer;
+        view.Renderer.sharedMaterial = material;
+        view.Renderer.shadowCastingMode = castShadows
+            ? ShadowCastingMode.On
+            : ShadowCastingMode.Off;
+        view.Renderer.receiveShadows = true;
+
+        BuildPatchMesh(view);
+        patches.Add(key, view);
+        return view;
+    }
+
+    public void RemovePatch(VoxelPatchKey key)
+    {
+        PatchView view;
+        if (!patches.TryGetValue(key, out view))
+            return;
+
+        patches.Remove(key);
+        if (view.GameObject != null)
+            Destroy(view.GameObject);
+    }
+
+    public void SetPatchVisible(VoxelPatchKey key, bool visible)
+    {
+        PatchView view;
+        if (patches.TryGetValue(key, out view))
+            view.SetVisible(visible);
+    }
+
+    public Vector3 GetPatchCenterDirection(VoxelPatchKey key)
+    {
+        float u0, u1, v0, v1;
+        CubeFaceBounds(key, out u0, out u1, out v0, out v1);
+        return CubeToSphere(key.Face, (u0 + u1) * 0.5f, (v0 + v1) * 0.5f);
+    }
+
+    public Vector3 GetPatchCenterWorld(VoxelPatchKey key)
+    {
+        Vector3 direction = GetPatchCenterDirection(key);
+        float radius = Mathf.Max(1f, definition.PlanetRadius);
+        return planetCenter +
+               direction * (radius + definition.SampleHeight(direction));
+    }
+
+    public float GetPatchWorldSize(VoxelPatchKey key)
+    {
+        int divisions = 1 << Mathf.Clamp(key.Lod, 0, 18);
+        return Mathf.Max(1f, definition.PlanetRadius * 2f / divisions);
+    }
+
+    public float DistanceToPatch(Vector3 targetPosition, VoxelPatchKey key)
+    {
+        Vector3 center = GetPatchCenterWorld(key);
+        float halfSize = GetPatchWorldSize(key) * 0.55f;
+        return Mathf.Max(
+            0f,
+            Vector3.Distance(targetPosition, center) - halfSize);
+    }
+
+    public bool IsPatchVisible(VoxelPatchKey key, Vector3 targetPosition)
+    {
+        Vector3 toTarget = targetPosition - planetCenter;
+        float centerDistance = toTarget.magnitude;
+
+        if (centerDistance <= definition.PlanetRadius * 1.02f)
+            return true;
+
+        if (centerDistance < 0.001f)
+            return true;
+
+        Vector3 cameraDirection = toTarget / centerDistance;
+        Vector3 patchDirection = GetPatchCenterDirection(key);
+
+        float patchSpan = 2f / Mathf.Max(1, 1 << key.Lod);
+        float angularHalfSize = Mathf.Min(
+            1.35f,
+            Mathf.Sqrt(2f) * patchSpan);
+
+        return Vector3.Dot(
+            cameraDirection,
+            patchDirection) > -Mathf.Sin(angularHalfSize * 1.1f);
+    }
+
+    public void UpdateCollision(
+        Vector3 targetPosition,
+        float collisionRadius,
+        int maxColliders,
+        bool convex,
+        PhysicMaterial physicMaterial)
+    {
+        collisionCandidates.Clear();
+        float radius = Mathf.Max(0f, collisionRadius);
+
+        foreach (PatchView view in patches.Values)
+        {
+            if (!view.Visible || view.Mesh == null)
+            {
+                view.SetCollider(false, convex, physicMaterial);
+                continue;
+            }
+
+            float distance = DistanceToPatch(targetPosition, view.Key);
+            if (distance <= radius)
+            {
+                view.DistanceToTarget = distance;
+                collisionCandidates.Add(view);
+            }
+            else
+            {
+                view.SetCollider(false, convex, physicMaterial);
+            }
+        }
+
+        collisionCandidates.Sort(
+            (a, b) => a.DistanceToTarget.CompareTo(b.DistanceToTarget));
+
+        int limit = Mathf.Max(1, maxColliders);
+        for (int i = 0; i < collisionCandidates.Count; i++)
+        {
+            collisionCandidates[i].SetCollider(
+                i < limit,
+                convex,
+                physicMaterial);
+        }
+    }
+
+    public bool RaycastSurface(
+        Ray ray,
+        float maxDistance,
+        out RaycastHit hit)
+    {
+        bool found = false;
+        float bestDistance = maxDistance;
+        hit = default(RaycastHit);
+
+        foreach (PatchView view in patches.Values)
+        {
+            if (!view.Visible || !view.Collider.enabled)
+                continue;
+
+            RaycastHit current;
+            if (view.Collider.Raycast(ray, out current, maxDistance) &&
+                current.distance < bestDistance)
+            {
+                bestDistance = current.distance;
+                hit = current;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    public void Clear()
+    {
+        foreach (PatchView view in patches.Values)
+        {
+            if (view.GameObject != null)
+                Destroy(view.GameObject);
+        }
+
+        patches.Clear();
+    }
+
+    private void EnsurePatchRoot(Transform owner)
+    {
+        if (patchRoot != null)
+            return;
+
+        GameObject root = new GameObject("PlanetPatches");
+        root.transform.SetParent(owner, false);
+        patchRoot = root.transform;
+    }
+
+    private void EnsureMaterial()
+    {
+        if (material != null)
+            return;
+
+        Shader shader = renderShader;
+        if (shader == null)
+            shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null)
+            shader = Shader.Find("Standard");
+
+        if (shader == null)
+        {
+            Debug.LogError(
+                $"[{nameof(VoxelPlanetGpuRenderer)}] No compatible surface shader found.",
+                this);
+            return;
+        }
+
+        material = new Material(shader);
+        material.name = "VoxelPlanetRuntimeMaterial";
+        material.enableInstancing = true;
+
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", baseColor);
+
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", baseColor);
+
+        if (material.HasProperty("_Cull"))
+            material.SetFloat("_Cull", 0f);
+    }
+
+    private void BuildPatchMesh(PatchView view)
+    {
+        int resolution = Mathf.Clamp(
+            definition.PatchResolution,
+            4,
+            64);
+
+        int stride = resolution + 1;
+        int gridVertexCount = stride * stride;
+
+        List<Vector3> vertices =
+            new List<Vector3>(gridVertexCount + resolution * 8);
+
+        List<int> triangles =
+            new List<int>(
+                resolution * resolution * 6 +
+                resolution * 4 * 6);
+
+        float u0, u1, v0, v1;
+        CubeFaceBounds(view.Key, out u0, out u1, out v0, out v1);
+
+        Vector3 patchCenter = GetPatchCenterWorld(view.Key);
+        view.GameObject.transform.position = patchCenter;
+        view.GameObject.transform.rotation = Quaternion.identity;
+
+        Vector3[] surfacePositions =
+            new Vector3[gridVertexCount];
+
+        for (int y = 0; y <= resolution; y++)
+        {
+            float v = Mathf.Lerp(
+                v0,
+                v1,
+                (float)y / resolution);
+
+            for (int x = 0; x <= resolution; x++)
+            {
+                float u = Mathf.Lerp(
+                    u0,
+                    u1,
+                    (float)x / resolution);
+
+                Vector3 direction =
+                    CubeToSphere(view.Key.Face, u, v);
+
+                float height =
+                    definition.SampleHeight(direction);
+
+                Vector3 world =
+                    planetCenter +
+                    direction *
+                    (definition.PlanetRadius + height);
+
+                Vector3 local = world - patchCenter;
+                int index = y * stride + x;
+                surfacePositions[index] = local;
+                vertices.Add(local);
+            }
+        }
+
+        bool flip = ShouldFlipWinding(view.Key.Face);
+
+        for (int y = 0; y < resolution; y++)
+        {
+            for (int x = 0; x < resolution; x++)
+            {
+                int a = y * stride + x;
+                int b = a + 1;
+                int c = a + stride;
+                int d = c + 1;
+
+                if (!flip)
+                {
+                    triangles.Add(a);
+                    triangles.Add(b);
+                    triangles.Add(c);
+
+                    triangles.Add(b);
+                    triangles.Add(d);
+                    triangles.Add(c);
+                }
+                else
+                {
+                    triangles.Add(a);
+                    triangles.Add(c);
+                    triangles.Add(b);
+
+                    triangles.Add(b);
+                    triangles.Add(c);
+                    triangles.Add(d);
+                }
+            }
+        }
+
+        float skirtDepth =
+            Mathf.Max(
+                definition.SkirtDepth,
+                GetPatchWorldSize(view.Key) * 0.02f);
+
+        for (int edge = 0; edge < 4; edge++)
+        {
+            AddSkirt(
+                surfacePositions,
+                resolution,
+                edge,
+                skirtDepth,
+                vertices,
+                triangles);
+        }
+
+        view.Mesh.Clear();
+        view.Mesh.indexFormat = IndexFormat.UInt32;
+        view.Mesh.SetVertices(vertices);
+        view.Mesh.SetTriangles(triangles, 0, true);
+        view.Mesh.RecalculateNormals();
+        view.Mesh.RecalculateBounds();
+        view.Mesh.UploadMeshData(false);
+
+        view.Collider.sharedMesh = null;
+        view.Collider.sharedMesh = view.Mesh;
+        view.SetVisible(true);
+        view.SetCollider(false, false, null);
+    }
+
+    private static void AddSkirt(
+        Vector3[] surfacePositions,
+        int resolution,
+        int edge,
+        float depth,
+        List<Vector3> vertices,
+        List<int> triangles)
+    {
+        for (int i = 0; i < resolution; i++)
+        {
+            int a = GetEdgeIndex(edge, i, resolution);
+            int b = GetEdgeIndex(edge, i + 1, resolution);
+
+            Vector3 pa = surfacePositions[a];
+            Vector3 pb = surfacePositions[b];
+
+            Vector3 da = pa.normalized;
+            Vector3 db = pb.normalized;
+
+            int baseIndex = vertices.Count;
+
+            vertices.Add(pa);
+            vertices.Add(pb);
+            vertices.Add(pa - da * depth);
+            vertices.Add(pb - db * depth);
+
+            triangles.Add(baseIndex + 0);
+            triangles.Add(baseIndex + 1);
+            triangles.Add(baseIndex + 3);
+
+            triangles.Add(baseIndex + 0);
+            triangles.Add(baseIndex + 3);
+            triangles.Add(baseIndex + 2);
+        }
+    }
+
+    private static int GetEdgeIndex(
+        int edge,
+        int i,
+        int resolution)
+    {
+        int stride = resolution + 1;
+
+        switch (edge)
+        {
+            case 0:
+                return i;
+            case 1:
+                return resolution + i * stride;
+            case 2:
+                return resolution * stride + i;
+            default:
+                return i * stride;
+        }
+    }
+
+    private static bool ShouldFlipWinding(VoxelCubeFace face)
+    {
+        Vector3 p0 = CubeToSphere(face, -0.02f, -0.02f);
+        Vector3 p1 = CubeToSphere(face, 0.02f, -0.02f);
+        Vector3 p2 = CubeToSphere(face, -0.02f, 0.02f);
+
+        Vector3 normal = Vector3.Cross(p1 - p0, p2 - p0);
+        Vector3 center = CubeToSphere(face, 0f, 0f);
+
+        return Vector3.Dot(normal, center) < 0f;
+    }
+
+    public static Vector3 CubeToSphere(
+        VoxelCubeFace face,
+        float u,
+        float v)
+    {
+        Vector3 cube;
+
+        switch (face)
+        {
+            case VoxelCubeFace.PositiveX:
+                cube = new Vector3(1f, v, -u);
+                break;
+            case VoxelCubeFace.NegativeX:
+                cube = new Vector3(-1f, v, u);
+                break;
+            case VoxelCubeFace.PositiveY:
+                cube = new Vector3(u, 1f, -v);
+                break;
+            case VoxelCubeFace.NegativeY:
+                cube = new Vector3(u, -1f, v);
+                break;
+            case VoxelCubeFace.PositiveZ:
+                cube = new Vector3(u, v, 1f);
+                break;
+            default:
+                cube = new Vector3(-u, v, -1f);
+                break;
+        }
+
+        return cube.normalized;
+    }
+
+    private static void CubeFaceBounds(
+        VoxelPatchKey key,
+        out float u0,
+        out float u1,
+        out float v0,
+        out float v1)
+    {
+        int divisions = 1 << Mathf.Clamp(
+            key.Lod,
+            0,
+            18);
+
+        u0 = -1f + 2f * key.X / divisions;
+        u1 = -1f + 2f * (key.X + 1) / divisions;
+        v0 = -1f + 2f * key.Y / divisions;
+        v1 = -1f + 2f * (key.Y + 1) / divisions;
+    }
+
+    public sealed class PatchView
+    {
+        public readonly VoxelPatchKey Key;
+        public readonly GameObject GameObject;
+        public readonly MeshFilter Filter;
+        public readonly MeshRenderer Renderer;
+        public readonly MeshCollider Collider;
+        public readonly Mesh Mesh;
+
+        public float DistanceToTarget;
+
+        public bool Visible =>
+            GameObject != null &&
+            GameObject.activeSelf;
+
+        public PatchView(VoxelPatchKey key)
+        {
+            Key = key;
+
+            GameObject = new GameObject(
+                $"Patch_{key.Face}_{key.Lod}_{key.X}_{key.Y}");
+
+            Filter = GameObject.AddComponent<MeshFilter>();
+            Renderer = GameObject.AddComponent<MeshRenderer>();
+            Collider = GameObject.AddComponent<MeshCollider>();
+
+            Mesh = new Mesh
+            {
+                name = GameObject.name + "_Mesh",
+                indexFormat = IndexFormat.UInt32
+            };
+
+            Mesh.MarkDynamic();
+            Filter.sharedMesh = Mesh;
+            Collider.enabled = false;
+        }
+
+        public void SetVisible(bool visible)
+        {
+            if (GameObject != null)
+                GameObject.SetActive(visible);
+        }
+
+        public void SetCollider(
+            bool enabled,
+            bool convex,
+            PhysicMaterial physicMaterial)
+        {
+            if (Collider == null)
+                return;
+
+            if (!enabled)
+            {
+                Collider.enabled = false;
+                return;
+            }
+
+            Collider.convex = convex;
+            Collider.sharedMaterial = physicMaterial;
+            Collider.sharedMesh = null;
+            Collider.sharedMesh = Mesh;
+            Collider.enabled = true;
+        }
+    }
+}
