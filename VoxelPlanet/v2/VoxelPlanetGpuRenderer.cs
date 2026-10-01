@@ -343,10 +343,15 @@ public sealed class VoxelPlanetGpuRenderer : MonoBehaviour
                 float height =
                     definition.SampleHeight(direction);
 
+                float surfaceRadius =
+                    Mathf.Max(
+                        0.01f,
+                        definition.PlanetRadius + height);
+
                 Vector3 world =
                     planetCenter +
                     direction *
-                    (definition.PlanetRadius + height);
+                    surfaceRadius;
 
                 Vector3 local = world - patchCenter;
                 int index = y * stride + x;
