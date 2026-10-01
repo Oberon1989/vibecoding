@@ -241,11 +241,31 @@ public sealed class VoxelGpuHierarchy : MonoBehaviour
         if (!node.IsSplit)
             return;
 
+        int removedLeaves = 0;
+
         for (int i = 0; i < node.Children.Length; i++)
+        {
+            removedLeaves += CountLeaves(node.Children[i]);
             DestroySubtree(node.Children[i]);
+        }
 
         node.Children = null;
-        leafCount -= 3;
+
+        // All descendant leaves are replaced by this single parent leaf.
+        leafCount -= Mathf.Max(0, removedLeaves - 1);
+    }
+
+    private int CountLeaves(Node node)
+    {
+        if (!node.IsSplit)
+            return 1;
+
+        int count = 0;
+
+        for (int i = 0; i < node.Children.Length; i++)
+            count += CountLeaves(node.Children[i]);
+
+        return count;
     }
 
     private void DestroySubtree(Node node)
