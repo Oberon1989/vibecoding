@@ -1072,9 +1072,11 @@ bool V1BuildEdgePolygon(
     }
 
 
-    V1SortPolygonVertices(
-        polygon,
-        axis);
+    // The four incident cells are already appended in a fixed
+    // topological cycle around the primal edge. Reordering by the
+    // solved vertex positions can swap adjacent vertices when QEF
+    // vertices move inside their cells, producing crossed/wrong edges.
+    // Keep the stencil order instead of sorting geometrically.
 
 
     return true;
