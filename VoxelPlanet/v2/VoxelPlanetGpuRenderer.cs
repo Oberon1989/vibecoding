@@ -548,6 +548,10 @@ public sealed class VoxelPlanetGpuRenderer : MonoBehaviour
 
         public float DistanceToTarget;
 
+        private bool colliderConfigured;
+        private bool colliderConvex;
+        private PhysicMaterial colliderMaterial;
+
         public bool Visible =>
             GameObject != null &&
             GameObject.activeSelf;
@@ -594,10 +598,19 @@ public sealed class VoxelPlanetGpuRenderer : MonoBehaviour
                 return;
             }
 
-            Collider.convex = convex;
-            Collider.sharedMaterial = physicMaterial;
-            Collider.sharedMesh = null;
-            Collider.sharedMesh = Mesh;
+            if (!colliderConfigured ||
+                Collider.sharedMesh != Mesh ||
+                colliderConvex != convex ||
+                colliderMaterial != physicMaterial)
+            {
+                Collider.convex = convex;
+                Collider.sharedMaterial = physicMaterial;
+                Collider.sharedMesh = Mesh;
+                colliderConfigured = true;
+                colliderConvex = convex;
+                colliderMaterial = physicMaterial;
+            }
+
             Collider.enabled = true;
         }
     }
