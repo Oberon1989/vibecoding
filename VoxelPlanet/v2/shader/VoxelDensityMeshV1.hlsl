@@ -232,6 +232,117 @@ int V1FindLeafAtCanonicalPoint(
 
 
 // ============================================================================
+// MISSING INCIDENT CELL STAND-IN
+//
+// A neighbouring leaf only owns a dual vertex where the surface crosses one of
+// its own cells. Along an LOD transition the coarser cell that contains a fine
+// edge can be empty (the planet shell test keeps those leaves active even when
+// the fine surface does not reach the coarse cell corners), so the four cell
+// stencil of that edge cannot be completed. Emitting the polygon with fewer
+// vertices, or dropping it, is what opened the holes along the transitions.
+//
+// Instead reuse the nearest cell of the same leaf that does own a vertex. The
+// search order is fixed and the vertex hash is only read, so every polygon that
+// refers to the same cell resolves the identical stand-in vertex and the poly-
+// gon loop around the transition stays closed.
+// ============================================================================
+
+static const int V1_STANDIN_SEARCH_RADIUS =
+    2;
+
+
+bool V1TryResolveStandInVertex(
+    uint leafSlot,
+    int3 cell,
+    out uint globalVertex)
+{
+    globalVertex =
+        VOXEL_INVALID_NODE_INDEX;
+
+
+    [loop]
+    for (int radius = 1;
+         radius <= V1_STANDIN_SEARCH_RADIUS;
+         ++radius)
+    {
+        [loop]
+        for (int dz = -radius;
+             dz <= radius;
+             ++dz)
+        {
+            [loop]
+            for (int dy = -radius;
+                 dy <= radius;
+                 ++dy)
+            {
+                [loop]
+                for (int dx = -radius;
+                     dx <= radius;
+                     ++dx)
+                {
+                    int shellDistance =
+                        max(
+                            abs(dx),
+                            max(
+                                abs(dy),
+                                abs(dz)));
+
+
+                    if (shellDistance !=
+                        radius)
+                    {
+                        continue;
+                    }
+
+
+                    int3 candidate =
+                        cell +
+                        int3(
+                            dx,
+                            dy,
+                            dz);
+
+
+                    if (any(candidate < 0) ||
+                        any(candidate >= CellCount))
+                    {
+                        continue;
+                    }
+
+
+                    uint localIndex =
+                        GetVertexIndex(
+                            candidate.x,
+                            candidate.y,
+                            candidate.z);
+
+
+                    if (TryGetLeafVertex(
+                            leafSlot,
+                            localIndex,
+                            globalVertex))
+                    {
+                        InterlockedOr(
+                            MeshOverflowFlagsBuffer[0],
+                            MESH_DIAGNOSTIC_TRANSITION_STANDIN_VERTEX);
+
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+
+    globalVertex =
+        VOXEL_INVALID_NODE_INDEX;
+
+
+    return false;
+}
+
+
+// ============================================================================
 // RESOLVE INCIDENT CELL
 //
 // sampleCoord uses a one-unit canonical offset to classify which cell lies
@@ -342,6 +453,17 @@ bool V1ResolveIncidentCell(
     }
 
 
+    // CSResetActiveLeaves() only clears the active leaf count, so a node that is
+    // no longer an active leaf keeps a stale slot from an earlier frame. Reject
+    // it here instead of resolving a vertex from an unrelated leaf.
+    if (ActiveLeafReadBuffer[
+            leafSlot].nodeIndex !=
+        nodeIndex)
+    {
+        return false;
+    }
+
+
     int canonicalStep =
         1 << node.lod;
 
@@ -370,10 +492,16 @@ bool V1ResolveIncidentCell(
             cell.z);
 
 
-    TryGetLeafVertex(
-        leafSlot,
-        localCell,
-        globalVertex);
+    if (!TryGetLeafVertex(
+            leafSlot,
+            localCell,
+            globalVertex))
+    {
+        V1TryResolveStandInVertex(
+            leafSlot,
+            cell,
+            globalVertex);
+    }
 
 
     return true;
@@ -542,294 +670,6 @@ void V1AccumulateIncidentCell(
         V1AppendUnique(
             polygon,
             vertexIndex);
-    }
-}
-
-
-// ============================================================================
-// POLYGON PROJECTION
-//
-// Right-handed bases:
-//
-// X: Y,Z -> +X
-// Y: Z,X -> +Y
-// Z: X,Y -> +Z
-// ============================================================================
-
-float V1PolygonCoordinateU(
-    float3 position,
-    uint axis)
-{
-    if (axis == 0u)
-        return position.y;
-
-    if (axis == 1u)
-        return position.z;
-
-    return position.x;
-}
-
-
-float V1PolygonCoordinateV(
-    float3 position,
-    uint axis)
-{
-    if (axis == 0u)
-        return position.z;
-
-    if (axis == 1u)
-        return position.x;
-
-    return position.y;
-}
-
-
-float V1PolygonAngle(
-    uint vertexIndex,
-    float3 center,
-    uint axis)
-{
-    float3 position =
-        VertexBuffer[
-            vertexIndex];
-
-
-    float2 delta =
-        float2(
-            V1PolygonCoordinateU(
-                position,
-                axis) -
-            V1PolygonCoordinateU(
-                center,
-                axis),
-
-            V1PolygonCoordinateV(
-                position,
-                axis) -
-            V1PolygonCoordinateV(
-                center,
-                axis));
-
-
-    return atan2(
-        delta.y,
-        delta.x);
-}
-
-
-// ============================================================================
-// SORT POLYGON VERTICES
-// ============================================================================
-
-void V1SortPolygonVertices(
-    inout V1EdgePolygon polygon,
-    uint axis)
-{
-    if (polygon.count < 3u)
-        return;
-
-
-    float3 center =
-        float3(
-            0.0f,
-            0.0f,
-            0.0f);
-
-
-    if (polygon.vertices.x !=
-        VOXEL_INVALID_NODE_INDEX)
-    {
-        center +=
-            VertexBuffer[
-                polygon.vertices.x];
-    }
-
-
-    if (polygon.vertices.y !=
-        VOXEL_INVALID_NODE_INDEX)
-    {
-        center +=
-            VertexBuffer[
-                polygon.vertices.y];
-    }
-
-
-    if (polygon.vertices.z !=
-        VOXEL_INVALID_NODE_INDEX)
-    {
-        center +=
-            VertexBuffer[
-                polygon.vertices.z];
-    }
-
-
-    if (polygon.count >= 4u &&
-        polygon.vertices.w !=
-        VOXEL_INVALID_NODE_INDEX)
-    {
-        center +=
-            VertexBuffer[
-                polygon.vertices.w];
-    }
-
-
-    center /=
-        (float) polygon.count;
-
-
-    float angle0 =
-        V1PolygonAngle(
-            polygon.vertices.x,
-            center,
-            axis);
-
-
-    float angle1 =
-        V1PolygonAngle(
-            polygon.vertices.y,
-            center,
-            axis);
-
-
-    float angle2 =
-        V1PolygonAngle(
-            polygon.vertices.z,
-            center,
-            axis);
-
-
-    float angle3 =
-        0.0f;
-
-
-    if (polygon.count >= 4u)
-    {
-        angle3 =
-            V1PolygonAngle(
-                polygon.vertices.w,
-                center,
-                axis);
-    }
-
-
-    // ------------------------------------------------------------------------
-    // Fixed sorting network.
-    // ------------------------------------------------------------------------
-
-    if (angle0 > angle1)
-    {
-        float tempAngle =
-            angle0;
-
-        angle0 =
-            angle1;
-
-        angle1 =
-            tempAngle;
-
-
-        uint tempVertex =
-            polygon.vertices.x;
-
-        polygon.vertices.x =
-            polygon.vertices.y;
-
-        polygon.vertices.y =
-            tempVertex;
-    }
-
-
-    if (polygon.count >= 4u &&
-        angle2 > angle3)
-    {
-        float tempAngle =
-            angle2;
-
-        angle2 =
-            angle3;
-
-        angle3 =
-            tempAngle;
-
-
-        uint tempVertex =
-            polygon.vertices.z;
-
-        polygon.vertices.z =
-            polygon.vertices.w;
-
-        polygon.vertices.w =
-            tempVertex;
-    }
-
-
-    if (angle0 > angle2)
-    {
-        float tempAngle =
-            angle0;
-
-        angle0 =
-            angle2;
-
-        angle2 =
-            tempAngle;
-
-
-        uint tempVertex =
-            polygon.vertices.x;
-
-        polygon.vertices.x =
-            polygon.vertices.z;
-
-        polygon.vertices.z =
-            tempVertex;
-    }
-
-
-    if (polygon.count >= 4u &&
-        angle1 > angle3)
-    {
-        float tempAngle =
-            angle1;
-
-        angle1 =
-            angle3;
-
-        angle3 =
-            tempAngle;
-
-
-        uint tempVertex =
-            polygon.vertices.y;
-
-        polygon.vertices.y =
-            polygon.vertices.w;
-
-        polygon.vertices.w =
-            tempVertex;
-    }
-
-
-    if (angle1 > angle2)
-    {
-        float tempAngle =
-            angle1;
-
-        angle1 =
-            angle2;
-
-        angle2 =
-            tempAngle;
-
-
-        uint tempVertex =
-            polygon.vertices.y;
-
-        polygon.vertices.y =
-            polygon.vertices.z;
-
-        polygon.vertices.z =
-            tempVertex;
     }
 }
 
@@ -1072,9 +912,12 @@ bool V1BuildEdgePolygon(
     }
 
 
-    V1SortPolygonVertices(
-        polygon,
-        axis);
+    // The four incident cells are appended above in a fixed topological cycle
+    // around the primal edge, so the polygon already has a correct, crack free
+    // vertex order. Sorting the vertices by their solved positions can swap two
+    // neighbours when a QEF vertex moves inside its cell: the quad becomes a bow
+    // tie, the triangle fan then covers the wrong half and leaves a lens shaped
+    // hole plus unpaired edges.
 
 
     return true;

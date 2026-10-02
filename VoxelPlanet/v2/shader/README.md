@@ -14,14 +14,42 @@ from coarse cells are collapsed before the polygon is triangulated. The same
 classification routine is used by the count and build passes. The old
 per-face and boundary-face mesh writers are replaced for this shader path.
 
-This is an experimental stitching algorithm, not a claim that all transition
-cases have been proven. In particular, the mesh diagnostic bit
-`MESH_DIAGNOSTIC_TRANSITION_MISSING_VERTICES` (bit 4) means one or more
-incident cell vertices could not be resolved for a crossing edge. This is a
-warning, not proof that a polygon was omitted: three remaining distinct
-vertices can still form a triangle. `MESH_DIAGNOSTIC_DROPPED_EDGE_POLYGON`
-(bit 7) is set only when an owned sign-changing edge has fewer than three
-distinct incident vertices and is omitted from the generated mesh. The other
+Two rules keep that loop closed:
+
+1. The four incident dual vertices are emitted in the fixed topological cycle
+   around the primal edge and are **not** re-sorted. The stencil order is
+   already a proper cycle, while ordering the same four vertices by their
+   solved angles can swap two neighbours when a QEF vertex moves inside its
+   cell. That turned the quad into a bow tie whose triangle fan covers the
+   wrong half, leaving a lens shaped opening plus unpaired edges.
+2. A coarser transition cell only owns a dual vertex when the surface crosses
+   its own cell corners. The octree marks a leaf as `OCTREE_FLAG_SURFACE` from
+   an AABB test against the planet shell `[radius - (|noiseHeight| + 1),
+   radius + (|noiseHeight| + 1)]`, so an active leaf can be empty and the cell
+   that contains a fine edge of an LOD transition can have no vertex. Rather
+   than dropping that polygon, the missing incident vertex is replaced by a
+   deterministic stand-in: the nearest cell of the same leaf that does own a
+   vertex, searched over the fixed Chebyshev shells 1..2. The search is a pure
+   function of the cell and the read only vertex hash, so every polygon that
+   refers to that cell resolves the identical vertex position and the surface
+   stays watertight across the transition.
+
+The resolver also rejects a `nodeIndex -> slot` mapping whose active leaf entry
+does not point back at that node, because `CSResetActiveLeaves()` only clears
+the active leaf count and a node that stopped being an active leaf would
+otherwise resolve a vertex from an unrelated leaf.
+
+These rules were verified offline with a CPU replica of the same octree, vertex
+stage and edge polygon rules on a mixed LOD test field: unpaired (crack) edges
+went from 17 to 0, bow ties from 1 to 0 and double edges from 12 to 0, and the
+same run with rougher terrain reproduces the pattern (6 to 0 cracks).
+
+Diagnostics: `MESH_DIAGNOSTIC_TRANSITION_STANDIN_VERTEX` (bit 8) is set when a
+stand-in vertex was used; that is expected along LOD transitions and the mesh
+is still closed. `MESH_DIAGNOSTIC_TRANSITION_MISSING_VERTICES` (bit 4) now
+means the stand-in search failed too, and `MESH_DIAGNOSTIC_DROPPED_EDGE_POLYGON`
+(bit 7) means such an owned sign-changing edge had fewer than three distinct
+vertices and was omitted. Those two are the remaining hole cases. The other
 bits keep their existing meanings: vertex/index arena overflow, hash failure,
 or an index write beyond its reservation.
 

@@ -277,6 +277,13 @@ static const uint MESH_DIAGNOSTIC_DROPPED_EDGE_POLYGON =
     1u << 7;
 
 
+// One or more incident cells of a sign-changing edge had no dual vertex (a
+// coarser transition cell the surface does not cross), so the polygon was
+// closed with a stand-in vertex taken from the nearest cell of that leaf.
+static const uint MESH_DIAGNOSTIC_TRANSITION_STANDIN_VERTEX =
+    1u << 8;
+
+
 // ============================================================
 // PERSISTENT GPU OCTREE NODE
 // ============================================================
