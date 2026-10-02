@@ -1313,10 +1313,22 @@ void V1BuildAxisEdges(
         }
 
 
+        // The fixed incident-cell order has a different base normal for
+        // the Y axis: (-X,-Z) -> (-X,+Z) -> (+X,+Z) -> (+X,-Z)
+        // winds toward -Y, while X/Z wind toward +X/+Z.
+        //
+        // densityA < densityB means the density gradient points along
+        // +axis (negative/inside -> positive/outside). Match that against
+        // the base winding so front faces point outward.
+        bool positiveWinding =
+            axis == 1u
+            ? densityA > densityB
+            : densityA < densityB;
+
         V1WritePolygon(
             polygon.ownerSlot,
             polygon,
-            densityA < densityB);
+            positiveWinding);
     }
 }
 
