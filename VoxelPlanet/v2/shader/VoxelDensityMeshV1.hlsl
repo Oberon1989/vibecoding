@@ -497,10 +497,12 @@ bool V1ResolveIncidentCell(
             localCell,
             globalVertex))
     {
-        V1TryResolveStandInVertex(
-            leafSlot,
-            cell,
-            globalVertex);
+        // A missing incident cell is a topology error, not a reason to
+        // substitute an unrelated dual vertex.
+        globalVertex =
+            VOXEL_INVALID_NODE_INDEX;
+
+        return false;
     }
 
 
@@ -881,6 +883,9 @@ bool V1BuildEdgePolygon(
         InterlockedOr(
             MeshOverflowFlagsBuffer[0],
             MESH_DIAGNOSTIC_TRANSITION_MISSING_VERTICES);
+
+        // Do not emit an incomplete incident-cell cycle.
+        return false;
     }
 
 
