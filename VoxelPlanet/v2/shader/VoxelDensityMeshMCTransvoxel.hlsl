@@ -581,7 +581,6 @@ void CSCountLeafMeshVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId
 
     uint halfResolution = resolution / MC_TRANSITION_HALF_RES;
     uint transitionCellsPerFace = halfResolution * halfResolution;
-    [loop]
     for (uint transitionIndex = groupThreadId.x; transitionIndex < transitionCellsPerFace * 6u; transitionIndex += 128u)
     {
         uint face = transitionIndex / transitionCellsPerFace;
@@ -649,7 +648,6 @@ void CSBuildVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_Gr
 
     uint halfResolution = resolution / MC_TRANSITION_HALF_RES;
     uint transitionCellsPerFace = halfResolution * halfResolution;
-    [loop]
     for (uint transitionIndex = groupThreadId.x; transitionIndex < transitionCellsPerFace * 6u; transitionIndex += 128u)
     {
         uint face = transitionIndex / transitionCellsPerFace;
