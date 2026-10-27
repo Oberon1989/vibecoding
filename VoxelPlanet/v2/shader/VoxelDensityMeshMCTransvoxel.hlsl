@@ -412,14 +412,14 @@ void BuildRegularCell(uint leafSlot, VoxelActiveLeaf leaf, uint3 cell, VoxelLeaf
         gradientReady[gradientIndex] = 0u;
 
     [loop]
-    for (uint triangle = 0u; triangle < triangleCount; ++triangle)
+    for (uint triangleIndex = 0u; triangleIndex < triangleCount; ++triangleIndex)
     {
         float3 trianglePositions[3];
         float3 triangleNormals[3];
         [unroll]
         for (uint corner = 0u; corner < 3u; ++corner)
         {
-            uint localVertex = RegularCellDataTable[classOffset + 1u + triangle * 3u + corner];
+            uint localVertex = RegularCellDataTable[classOffset + 1u + triangleIndex * 3u + corner];
             if (localVertex >= MC_MAX_REGULAR_VERTICES)
                 return;
 
@@ -504,14 +504,14 @@ void BuildTransitionCell(
     uint geometry = TransitionCellDataTable[classOffset];
     uint triangleCount = geometry & 0x0Fu;
     [loop]
-    for (uint triangle = 0u; triangle < triangleCount; ++triangle)
+    for (uint triangleIndex = 0u; triangleIndex < triangleCount; ++triangleIndex)
     {
         float3 trianglePositions[3];
         float3 triangleNormals[3];
         [unroll]
         for (uint corner = 0u; corner < 3u; ++corner)
         {
-            uint localVertex = TransitionCellDataTable[classOffset + 1u + triangle * 3u + corner];
+            uint localVertex = TransitionCellDataTable[classOffset + 1u + triangleIndex * 3u + corner];
             if (localVertex >= 12u)
                 return;
             uint edgeCode = TransitionVertexDataTable[caseCode * 12u + localVertex];
