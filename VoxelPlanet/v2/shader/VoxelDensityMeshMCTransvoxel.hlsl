@@ -235,7 +235,7 @@ void GetTransitionSampleLocalPosition(
     localGrid[normalAxis] = (face & 1u) == 0u ? 0.0f : (float)CellCount;
 }
 
-uint GetTransitionCase(float densities[9])
+uint GetTransitionCase(float densities[13])
 {
     // The official table bit order differs from row-major sample order.
     uint caseCode = 0u;

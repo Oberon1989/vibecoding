@@ -10,22 +10,44 @@ public class Crosshair : MonoBehaviour
     {
         float centerX = Screen.width * 0.5f;
         float centerY = Screen.height * 0.5f;
+        float halfGap = Mathf.Max(0f, gap) * 0.5f;
+        float segmentLength = Mathf.Max(0f, size * 0.5f - halfGap);
 
         GUI.Box(
             new Rect(
                 centerX - thickness * 0.5f,
-                centerY - size * 0.5f,
+                centerY - halfGap - segmentLength,
                 thickness,
-                size
+                segmentLength
             ),
             GUIContent.none
         );
 
         GUI.Box(
             new Rect(
-                centerX - size * 0.5f,
+                centerX - thickness * 0.5f,
+                centerY + halfGap,
+                thickness,
+                segmentLength
+            ),
+            GUIContent.none
+        );
+
+        GUI.Box(
+            new Rect(
+                centerX - halfGap - segmentLength,
                 centerY - thickness * 0.5f,
-                size,
+                segmentLength,
+                thickness
+            ),
+            GUIContent.none
+        );
+
+        GUI.Box(
+            new Rect(
+                centerX + halfGap,
+                centerY - thickness * 0.5f,
+                segmentLength,
                 thickness
             ),
             GUIContent.none

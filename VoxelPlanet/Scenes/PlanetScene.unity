@@ -916,7 +916,6 @@ MonoBehaviour:
   mouseSensitivity: 2
   cameraTransform: {fileID: 1889760658}
   planetCenter: {fileID: 103722957}
-  planetMass: 5.972e+24
   surfaceGravity: 9.81
   playerMass: 80
   rotationSpeed: 10

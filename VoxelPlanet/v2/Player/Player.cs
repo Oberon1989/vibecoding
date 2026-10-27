@@ -14,7 +14,6 @@ public class SimplePlayerMovement : MonoBehaviour
 
     [Header("Planet")]
     [SerializeField] private Transform planetCenter;
-    [SerializeField] private float planetMass = 5.972e24f;
     [SerializeField] private float surfaceGravity = 9.81f;
 
     [Header("Player")]
@@ -80,19 +79,19 @@ public class SimplePlayerMovement : MonoBehaviour
 
         if (voxelHierarchy == null)
         {
-            VoxelPlanet planet = FindFirstObjectByType<VoxelPlanet>();
+            VoxelPlanet planet = FindAnyObjectByType<VoxelPlanet>();
             if (planet != null)
                 voxelHierarchy = planet.GpuHierarchy;
 
             if (voxelHierarchy == null)
-                voxelHierarchy = FindFirstObjectByType<VoxelGpuHierarchy>();
+                voxelHierarchy = FindAnyObjectByType<VoxelGpuHierarchy>();
         }
 
         if (voxelCollider == null && voxelHierarchy != null)
             voxelCollider = voxelHierarchy.GetComponent<VoxelGpuCollider>();
 
         if (voxelCollider == null)
-            voxelCollider = FindFirstObjectByType<VoxelGpuCollider>();
+            voxelCollider = FindAnyObjectByType<VoxelGpuCollider>();
     }
 
     private void HandleVoxelEditing()

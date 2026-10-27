@@ -370,8 +370,7 @@ public class VoxelPlanetGpuRenderer : MonoBehaviour
         if (directionalLight != null)
             return;
 
-        Light[] sceneLights =
-            FindObjectsByType<Light>(FindObjectsSortMode.None);
+        Light[] sceneLights = FindObjectsByType<Light>();
 
         for (int i = 0; i < sceneLights.Length; i++)
         {
