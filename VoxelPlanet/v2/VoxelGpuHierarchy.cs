@@ -42,6 +42,8 @@ public class VoxelGpuHierarchy : MonoBehaviour
     private const float MIN_DENSITY_BRUSH_RADIUS = 0.5f;
 
     private const int LEAF_SLOT_GROUPS_X = 32768;
+    private const int MESH_THREADS_PER_GROUP = 128;
+    private const int TRANSITION_HALF_RESOLUTION = 2;
 
     private const int THREADS = 64;
     private const int DEFAULT_CHUNK_RESOLUTION = 32;
@@ -102,8 +104,10 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
     private int resetLeafMeshKernel;
     private int countLeafMeshVerticesKernel;
+    private int countTransitionLeafMeshVerticesKernel;
     private int scanLeafMeshVertexOffsetsKernel;
     private int buildVerticesKernel;
+    private int buildTransitionVerticesKernel;
 
     private int finalizeLeafMeshKernel;
 
@@ -703,6 +707,11 @@ public class VoxelGpuHierarchy : MonoBehaviour
                 "CSCountLeafMeshVertices"
             );
 
+        countTransitionLeafMeshVerticesKernel =
+            voxelDensityShader.FindKernel(
+                "CSCountTransitionLeafMeshVertices"
+            );
+
         scanLeafMeshVertexOffsetsKernel =
             voxelDensityShader.FindKernel(
                 "CSScanLeafMeshVertexOffsets"
@@ -711,6 +720,11 @@ public class VoxelGpuHierarchy : MonoBehaviour
         buildVerticesKernel =
             voxelDensityShader.FindKernel(
                 "CSBuildVertices"
+            );
+
+        buildTransitionVerticesKernel =
+            voxelDensityShader.FindKernel(
+                "CSBuildTransitionVertices"
             );
 
         finalizeLeafMeshKernel =
@@ -986,20 +1000,29 @@ public class VoxelGpuHierarchy : MonoBehaviour
         BindCommonBuffers(rebuildActiveLeavesKernel);
         BindCommonBuffers(resetLeafMeshKernel);
         BindCommonBuffers(countLeafMeshVerticesKernel);
+        BindCommonBuffers(countTransitionLeafMeshVerticesKernel);
         BindCommonBuffers(scanLeafMeshVertexOffsetsKernel);
         BindCommonBuffers(buildVerticesKernel);
+        BindCommonBuffers(buildTransitionVerticesKernel);
         BindCommonBuffers(finalizeLeafMeshKernel);
         BindCommonBuffers(resetLodStatsKernel);
         BindCommonBuffers(calculateLodStatsKernel);
 
         BindLeafMeshBuffers(resetLeafMeshKernel);
         BindLeafMeshBuffers(countLeafMeshVerticesKernel);
+        BindLeafMeshBuffers(countTransitionLeafMeshVerticesKernel);
         BindLeafMeshBuffers(scanLeafMeshVertexOffsetsKernel);
         BindLeafMeshBuffers(buildVerticesKernel);
+        BindLeafMeshBuffers(buildTransitionVerticesKernel);
         BindLeafMeshBuffers(finalizeLeafMeshKernel);
 
         BindMeshReadOnlyBuffers(
             countLeafMeshVerticesKernel,
+            false,
+            true
+        );
+        BindMeshReadOnlyBuffers(
+            countTransitionLeafMeshVerticesKernel,
             false,
             true
         );
@@ -1010,6 +1033,11 @@ public class VoxelGpuHierarchy : MonoBehaviour
         );
         BindMeshReadOnlyBuffers(
             buildVerticesKernel,
+            true,
+            true
+        );
+        BindMeshReadOnlyBuffers(
+            buildTransitionVerticesKernel,
             true,
             true
         );
@@ -1030,10 +1058,14 @@ public class VoxelGpuHierarchy : MonoBehaviour
             activeLeafMeshSlotBuffer
         );
         BindDensityEditBuffer(countLeafMeshVerticesKernel);
+        BindDensityEditBuffer(countTransitionLeafMeshVerticesKernel);
         BindDensityEditBuffer(buildVerticesKernel);
+        BindDensityEditBuffer(buildTransitionVerticesKernel);
 
         BindMeshTableBuffers(countLeafMeshVerticesKernel);
+        BindMeshTableBuffers(countTransitionLeafMeshVerticesKernel);
         BindMeshTableBuffers(buildVerticesKernel);
+        BindMeshTableBuffers(buildTransitionVerticesKernel);
     }
 
     private void BindDensityEditBuffer(int kernel)
@@ -1435,6 +1467,9 @@ public class VoxelGpuHierarchy : MonoBehaviour
         DispatchLeafMeshPerLeaf(
             countLeafMeshVerticesKernel
         );
+        DispatchLeafMeshTransitionCellsPerLeaf(
+            countTransitionLeafMeshVerticesKernel
+        );
     }
 
     private void DispatchScanLeafMeshVertexOffsets()
@@ -1451,6 +1486,31 @@ public class VoxelGpuHierarchy : MonoBehaviour
     {
         DispatchLeafMeshPerLeaf(
             buildVerticesKernel
+        );
+        DispatchLeafMeshTransitionCellsPerLeaf(
+            buildTransitionVerticesKernel
+        );
+    }
+
+    private void DispatchLeafMeshTransitionCellsPerLeaf(int kernel)
+    {
+        int groupsX = Mathf.Min(maxActiveLeaves, LEAF_SLOT_GROUPS_X);
+        int leafGroupRows = Mathf.Max(
+            1,
+            Mathf.CeilToInt(maxActiveLeaves / (float)LEAF_SLOT_GROUPS_X)
+        );
+        int halfResolution = DEFAULT_CHUNK_RESOLUTION / TRANSITION_HALF_RESOLUTION;
+        int transitionCellsPerLeaf = halfResolution * halfResolution * 6;
+        int groupsPerLeaf = Mathf.Max(
+            1,
+            Mathf.CeilToInt(transitionCellsPerLeaf / (float)MESH_THREADS_PER_GROUP)
+        );
+
+        voxelDensityShader.Dispatch(
+            kernel,
+            groupsX,
+            leafGroupRows * groupsPerLeaf,
+            1
         );
     }
 

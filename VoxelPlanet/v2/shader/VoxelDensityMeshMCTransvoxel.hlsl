@@ -32,6 +32,30 @@ uint GetLeafSlot(uint3 groupId)
     return groupId.x + groupId.y * 32768u;
 }
 
+bool GetTransitionCellDispatch(
+    uint3 groupId,
+    uint3 groupThreadId,
+    out uint leafSlot,
+    out uint transitionIndex)
+{
+    uint halfResolution = (uint)CellCount / MC_TRANSITION_HALF_RES;
+    if (halfResolution == 0u)
+    {
+        leafSlot = 0u;
+        transitionIndex = 0u;
+        return false;
+    }
+
+    uint transitionCellsPerFace = halfResolution * halfResolution;
+    uint totalTransitionCells = transitionCellsPerFace * 6u;
+    uint groupsPerLeaf = (totalTransitionCells + 127u) / 128u;
+    uint leafGroupY = groupId.y / groupsPerLeaf;
+    uint batch = groupId.y - leafGroupY * groupsPerLeaf;
+    leafSlot = groupId.x + leafGroupY * 32768u;
+    transitionIndex = batch * 128u + groupThreadId.x;
+    return transitionIndex < totalTransitionCells;
+}
+
 bool IsActiveLeafSlot(uint leafSlot)
 {
     return leafSlot < ActiveLeafCountReadBuffer[0];
@@ -579,17 +603,26 @@ void CSCountLeafMeshVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId
         CountRegularCell(leaf, uint3(x, y, z), localCount);
     }
 
-    uint halfResolution = resolution / MC_TRANSITION_HALF_RES;
-    uint transitionCellsPerFace = halfResolution * halfResolution;
-    for (uint transitionIndex = groupThreadId.x; transitionIndex < transitionCellsPerFace * 6u; transitionIndex += 128u)
-    {
-        uint face = transitionIndex / transitionCellsPerFace;
-        uint cellIndex = transitionIndex % transitionCellsPerFace;
-        uint cellU = cellIndex % halfResolution;
-        uint cellV = cellIndex / halfResolution;
-        localCount += CountTransitionCell(leaf, face, cellU, cellV);
-    }
+    if (localCount > 0u)
+        InterlockedAdd(ActiveLeafMeshVertexCounterBuffer[leafSlot], localCount);
+}
 
+void CSCountTransitionLeafMeshVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    uint leafSlot;
+    uint transitionIndex;
+    if (!GetTransitionCellDispatch(groupId, groupThreadId, leafSlot, transitionIndex))
+        return;
+    if (!IsActiveLeafSlot(leafSlot))
+        return;
+
+    uint halfResolution = (uint)CellCount / MC_TRANSITION_HALF_RES;
+    uint transitionCellsPerFace = halfResolution * halfResolution;
+    uint face = transitionIndex / transitionCellsPerFace;
+    uint cellIndex = transitionIndex % transitionCellsPerFace;
+    uint cellU = cellIndex % halfResolution;
+    uint cellV = cellIndex / halfResolution;
+    uint localCount = CountTransitionCell(ActiveLeafReadBuffer[leafSlot], face, cellU, cellV);
     if (localCount > 0u)
         InterlockedAdd(ActiveLeafMeshVertexCounterBuffer[leafSlot], localCount);
 }
@@ -646,16 +679,26 @@ void CSBuildVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_Gr
         BuildRegularCell(leafSlot, leaf, uint3(x, y, z), info);
     }
 
-    uint halfResolution = resolution / MC_TRANSITION_HALF_RES;
+}
+
+void CSBuildTransitionVerticesImpl(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    uint leafSlot;
+    uint transitionIndex;
+    if (!GetTransitionCellDispatch(groupId, groupThreadId, leafSlot, transitionIndex))
+        return;
+    if (!IsActiveLeafSlot(leafSlot))
+        return;
+
+    uint halfResolution = (uint)CellCount / MC_TRANSITION_HALF_RES;
     uint transitionCellsPerFace = halfResolution * halfResolution;
-    for (uint transitionIndex = groupThreadId.x; transitionIndex < transitionCellsPerFace * 6u; transitionIndex += 128u)
-    {
-        uint face = transitionIndex / transitionCellsPerFace;
-        uint cellIndex = transitionIndex % transitionCellsPerFace;
-        uint cellU = cellIndex % halfResolution;
-        uint cellV = cellIndex / halfResolution;
-        BuildTransitionCell(leafSlot, leaf, face, cellU, cellV, info);
-    }
+    uint face = transitionIndex / transitionCellsPerFace;
+    uint cellIndex = transitionIndex % transitionCellsPerFace;
+    uint cellU = cellIndex % halfResolution;
+    uint cellV = cellIndex / halfResolution;
+    VoxelActiveLeaf leaf = ActiveLeafReadBuffer[leafSlot];
+    VoxelLeafMeshInfo info = ActiveLeafMeshInfoReadBuffer[leafSlot];
+    BuildTransitionCell(leafSlot, leaf, face, cellU, cellV, info);
 }
 
 void CSFinalizeLeafMeshImpl(uint3 id : SV_DispatchThreadID)

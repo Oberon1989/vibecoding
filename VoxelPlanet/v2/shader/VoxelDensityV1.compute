@@ -12,8 +12,10 @@
 
 #pragma kernel CSResetLeafMesh
 #pragma kernel CSCountLeafMeshVertices
+#pragma kernel CSCountTransitionLeafMeshVertices
 #pragma kernel CSScanLeafMeshVertexOffsets
 #pragma kernel CSBuildVertices
+#pragma kernel CSBuildTransitionVertices
 #pragma kernel CSFinalizeLeafMesh
 
 #include "VoxelDensityTypes.hlsl"
@@ -34,6 +36,12 @@ void CSCountLeafMeshVertices(uint3 groupId : SV_GroupID, uint3 groupThreadId : S
     CSCountLeafMeshVerticesImpl(groupId, groupThreadId);
 }
 
+[numthreads(128, 1, 1)]
+void CSCountTransitionLeafMeshVertices(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    CSCountTransitionLeafMeshVerticesImpl(groupId, groupThreadId);
+}
+
 [numthreads(1, 1, 1)]
 void CSScanLeafMeshVertexOffsets(uint3 id : SV_DispatchThreadID)
 {
@@ -44,6 +52,12 @@ void CSScanLeafMeshVertexOffsets(uint3 id : SV_DispatchThreadID)
 void CSBuildVertices(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
 {
     CSBuildVerticesImpl(groupId, groupThreadId);
+}
+
+[numthreads(128, 1, 1)]
+void CSBuildTransitionVertices(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
+{
+    CSBuildTransitionVerticesImpl(groupId, groupThreadId);
 }
 
 [numthreads(1, 1, 1)]
