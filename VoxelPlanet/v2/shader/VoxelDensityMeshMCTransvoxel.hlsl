@@ -246,17 +246,37 @@ void GetTransitionSampleLocalPosition(
     uint sampleIndex,
     out float3 localGrid)
 {
-    uint uAxis;
-    uint vAxis;
-    uint normalAxis;
-    GetFaceAxes(face, uAxis, vAxis, normalAxis);
+    float sampleU = (float)(cellU * 2u + sampleIndex % 3u);
+    float sampleV = (float)(cellV * 2u + sampleIndex / 3u);
+    float normal = (face & 1u) == 0u ? 0.0f : (float)CellCount;
 
-    uint sampleU = sampleIndex % 3u;
-    uint sampleV = sampleIndex / 3u;
-    localGrid = 0.0f;
-    localGrid[uAxis] = (float)(cellU * 2u + sampleU);
-    localGrid[vAxis] = (float)(cellV * 2u + sampleV);
-    localGrid[normalAxis] = (face & 1u) == 0u ? 0.0f : (float)CellCount;
+    if (face < 2u)
+        localGrid = float3(normal, sampleU, sampleV);
+    else if (face < 4u)
+        localGrid = float3(sampleV, normal, sampleU);
+    else
+        localGrid = float3(sampleU, sampleV, normal);
+}
+
+void SampleTransitionBoundary(
+    uint face,
+    uint cellU,
+    uint cellV,
+    uint sampleIndex,
+    float step,
+    float width,
+    float3 outward,
+    float3 leafOrigin,
+    out float3 position,
+    out float density,
+    out float3 gradient)
+{
+    float3 localGrid;
+    GetTransitionSampleLocalPosition(face, cellU, cellV, sampleIndex, localGrid);
+    float3 boundaryPosition = leafOrigin + localGrid * step;
+    density = SampleDensity(boundaryPosition);
+    gradient = EstimateDensityGradient(boundaryPosition, step);
+    position = boundaryPosition - outward * width;
 }
 
 uint GetTransitionCase(float densities[13])
@@ -310,16 +330,45 @@ bool GetTransitionSamples(
     float3 outward = GetFaceNormal(face);
     float3 leafOrigin = GetLeafOrigin(leaf);
 
-    [unroll]
-    for (uint sampleIndex = 0u; sampleIndex < 9u; ++sampleIndex)
-    {
-        float3 localGrid;
-        GetTransitionSampleLocalPosition(face, cellU, cellV, sampleIndex, localGrid);
-        float3 boundaryPosition = leafOrigin + localGrid * step;
-        densities[sampleIndex] = SampleDensity(boundaryPosition);
-        gradients[sampleIndex] = EstimateDensityGradient(boundaryPosition, step);
-        positions[sampleIndex] = boundaryPosition - outward * width;
-    }
+    float3 samplePosition;
+    float sampleDensity;
+    float3 sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 0u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[0] = samplePosition;
+    densities[0] = sampleDensity;
+    gradients[0] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 1u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[1] = samplePosition;
+    densities[1] = sampleDensity;
+    gradients[1] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 2u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[2] = samplePosition;
+    densities[2] = sampleDensity;
+    gradients[2] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 3u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[3] = samplePosition;
+    densities[3] = sampleDensity;
+    gradients[3] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 4u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[4] = samplePosition;
+    densities[4] = sampleDensity;
+    gradients[4] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 5u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[5] = samplePosition;
+    densities[5] = sampleDensity;
+    gradients[5] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 6u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[6] = samplePosition;
+    densities[6] = sampleDensity;
+    gradients[6] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 7u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[7] = samplePosition;
+    densities[7] = sampleDensity;
+    gradients[7] = sampleGradient;
+    SampleTransitionBoundary(face, cellU, cellV, 8u, step, width, outward, leafOrigin, samplePosition, sampleDensity, sampleGradient);
+    positions[8] = samplePosition;
+    densities[8] = sampleDensity;
+    gradients[8] = sampleGradient;
 
     densities[9] = densities[0];
     densities[10] = densities[2];

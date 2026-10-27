@@ -12,6 +12,7 @@
 
 #pragma kernel CSResetLeafMesh
 #pragma kernel CSCountLeafMeshVertices
+// Transition cells use separate groups so each thread handles one cell without a loop.
 #pragma kernel CSCountTransitionLeafMeshVertices
 #pragma kernel CSScanLeafMeshVertexOffsets
 #pragma kernel CSBuildVertices
