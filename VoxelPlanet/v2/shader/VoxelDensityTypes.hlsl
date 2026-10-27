@@ -64,16 +64,11 @@ float LodMergeDistanceMultiplier;
 // MeshIndexArenaCapacity:
 //     total number of uint indices available.
 //
-// MeshVertexHashCapacity:
-//     number of open-addressing hash slots used to map
-//     (leaf slot, local vertex index) -> global vertex index.
-//
 // These are independent from the octree capacities.
 // ============================================================
 
 int MeshVertexArenaCapacity;
 int MeshIndexArenaCapacity;
-int MeshVertexHashCapacity;
 
 
 // ============================================================
@@ -84,9 +79,6 @@ int MeshVertexHashCapacity;
 //
 // VertexBuffer / NormalBuffer:
 //     global vertex arena.
-//
-// VertexValid:
-//     global validity flags for the vertex arena.
 //
 // IndexBuffer:
 //     global index arena.
@@ -101,8 +93,6 @@ int MeshVertexHashCapacity;
 RWStructuredBuffer<float3> VertexBuffer;
 
 RWStructuredBuffer<float3> NormalBuffer;
-
-RWStructuredBuffer<uint> VertexValid;
 
 RWStructuredBuffer<uint> VertexCountBuffer;
 
@@ -251,30 +241,8 @@ static const uint MESH_OVERFLOW_INDEX_ARENA =
     1u << 1;
 
 
-static const uint MESH_OVERFLOW_VERTEX_HASH =
-    1u << 2;
-
-
 static const uint MESH_OVERFLOW_INDEX_WRITE =
     1u << 3;
-
-
-static const uint MESH_DIAGNOSTIC_TRANSITION_MISSING_VERTICES =
-    1u << 4;
-
-
-static const uint MESH_DIAGNOSTIC_BOUNDARY_NEIGHBOR_SLOT =
-    1u << 5;
-
-
-static const uint MESH_DIAGNOSTIC_BOUNDARY_MISSING_NEIGHBOR =
-    1u << 6;
-
-
-// A sign-changing primal edge owned by this LOD was not emitted because
-// fewer than three distinct incident dual vertices could be resolved.
-static const uint MESH_DIAGNOSTIC_DROPPED_EDGE_POLYGON =
-    1u << 7;
 
 
 // ============================================================
@@ -439,47 +407,10 @@ RWStructuredBuffer<VoxelLeafMeshInfo>
 //     build pass:
 //         local vertex cursor
 //
-// Index counter:
-//
-//     count pass:
-//         conservative index capacity
-//
-//     face build:
-//         local index cursor
 // ============================================================
 
 RWStructuredBuffer<uint>
     ActiveLeafMeshVertexCounterBuffer;
-
-
-RWStructuredBuffer<uint>
-    ActiveLeafMeshIndexCounterBuffer;
-
-
-// ============================================================
-// ACTIVE LEAF MESH VERTEX HASH
-// ============================================================
-//
-// Open-addressing table.
-//
-// key:
-//     packed leaf slot + local vertex index.
-//
-// value:
-//     global VertexBuffer index.
-//
-// key == 0 means empty.
-//
-// Valid keys are never zero because local vertex index is stored
-// as localIndex + 1 in the low 16 bits.
-// ============================================================
-
-RWStructuredBuffer<uint>
-    ActiveLeafMeshVertexHashKeyBuffer;
-
-
-RWStructuredBuffer<uint>
-    ActiveLeafMeshVertexHashValueBuffer;
 
 
 // ============================================================
@@ -512,9 +443,6 @@ StructuredBuffer<VoxelOctreeNode> OctreeNodeReadBuffer;
 StructuredBuffer<VoxelActiveLeaf> ActiveLeafReadBuffer;
 StructuredBuffer<uint> ActiveLeafCountReadBuffer;
 StructuredBuffer<VoxelLeafMeshInfo> ActiveLeafMeshInfoReadBuffer;
-StructuredBuffer<uint> ActiveLeafMeshSlotReadBuffer;
-StructuredBuffer<uint> ActiveLeafMeshVertexHashKeyReadBuffer;
-StructuredBuffer<uint> ActiveLeafMeshVertexHashValueReadBuffer;
 StructuredBuffer<VoxelActiveLeafNeighborTopology>
     ActiveLeafNeighborTopologyReadBuffer;
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 [DisallowMultipleComponent]
@@ -20,9 +20,8 @@ public class VoxelGpuHierarchy : MonoBehaviour
     [SerializeField, Min(0.01f)] private float lodUpdateMovementThreshold = 0.25f;
 
     [Header("Leaf Mesh Arena")]
-    [SerializeField] private int meshVertexArenaCapacity = 1048576;
+    [SerializeField] private int meshVertexArenaCapacity = 8388608;
     [SerializeField] private int meshIndexArenaCapacity = 8388608;
-    [SerializeField] private int meshVertexHashCapacity = 2097152;
 
     [Header("Runtime Density Editing")]
     [SerializeField, Min(0.05f)] private float densityMeshRebuildDelay = 0.35f;
@@ -35,7 +34,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
     private const int NODE_STRIDE = 48;
     private const int ACTIVE_LEAF_STRIDE = 24;
     private const int ACTIVE_LEAF_NEIGHBOR_TOPOLOGY_STRIDE = 96;
-    private const int ACTIVE_LEAF_TRANSITION_TOPOLOGY_STRIDE = 24;
     private const int ACTIVE_LEAF_MESH_SLOT_STRIDE = 4;
     private const int ACTIVE_LEAF_MESH_INFO_STRIDE = 28;
     private const int UINT_STRIDE = 4;
@@ -49,22 +47,13 @@ public class VoxelGpuHierarchy : MonoBehaviour
     private const int DEFAULT_CHUNK_RESOLUTION = 32;
     private const float BASE_LATTICE_SIZE = 0.5f;
 
-    private const uint TRANSITION_NONE = 0u;
-    private const uint TRANSITION_COARSE_TO_FINE = 1u;
-    private const uint TRANSITION_FINE_TO_COARSE = 2u;
-    private const uint TRANSITION_MIXED = 3u;
-
     private GraphicsBuffer octreeNodeBuffer;
     private GraphicsBuffer activeLeafBuffer;
     private GraphicsBuffer activeLeafNeighborTopologyBuffer;
-    private GraphicsBuffer activeLeafTransitionTopologyBuffer;
     private GraphicsBuffer activeLeafMeshSlotBuffer;
 
     private GraphicsBuffer activeLeafMeshInfoBuffer;
     private GraphicsBuffer activeLeafMeshVertexCounterBuffer;
-    private GraphicsBuffer activeLeafMeshIndexCounterBuffer;
-    private GraphicsBuffer activeLeafMeshVertexHashKeyBuffer;
-    private GraphicsBuffer activeLeafMeshVertexHashValueBuffer;
     private GraphicsBuffer meshOverflowFlagsBuffer;
 
     private GraphicsBuffer octreeFreeNodeStack;
@@ -76,10 +65,16 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
     private GraphicsBuffer vertexBuffer;
     private GraphicsBuffer normalBuffer;
-    private GraphicsBuffer vertexValidBuffer;
     private GraphicsBuffer vertexCountBuffer;
     private GraphicsBuffer indexBuffer;
     private GraphicsBuffer indexCountBuffer;
+
+    private GraphicsBuffer regularCellClassTableBuffer;
+    private GraphicsBuffer regularCellDataTableBuffer;
+    private GraphicsBuffer regularVertexDataTableBuffer;
+    private GraphicsBuffer transitionCellClassTableBuffer;
+    private GraphicsBuffer transitionCellDataTableBuffer;
+    private GraphicsBuffer transitionVertexDataTableBuffer;
 
     [System.Runtime.InteropServices.StructLayout(
         System.Runtime.InteropServices.LayoutKind.Sequential)]
@@ -101,7 +96,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
     private int buildNeighborLodKernel;
     private int buildNeighborTopologyKernel;
-    private int buildTransitionTopologyKernel;
 
     private int resetActiveLeavesKernel;
     private int rebuildActiveLeavesKernel;
@@ -110,14 +104,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
     private int countLeafMeshVerticesKernel;
     private int scanLeafMeshVertexOffsetsKernel;
     private int buildVerticesKernel;
-
-    private int countLeafMeshIndicesKernel;
-    private int scanLeafMeshIndexOffsetsKernel;
-
-    private int buildXFacesKernel;
-    private int buildYFacesKernel;
-    private int buildZFacesKernel;
-    private int buildLeafBoundaryFacesKernel;
 
     private int finalizeLeafMeshKernel;
 
@@ -300,14 +286,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
             return false;
         }
 
-        if (meshVertexHashCapacity < 1024)
-        {
-            LogError(
-                $"MeshVertexHashCapacity={meshVertexHashCapacity} is too small."
-            );
-            return false;
-        }
-
         lodTargetPosition =
             initialLodTargetPosition;
 
@@ -351,7 +329,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         DispatchRebuildActiveLeaves();
 
         DispatchBuildNeighborTopology();
-        DispatchBuildTransitionTopology();
 
         DispatchBuildLeafMesh();
 
@@ -387,7 +364,7 @@ public class VoxelGpuHierarchy : MonoBehaviour
             $"MeshArena " +
             $"Vertices={meshVertexArenaCapacity} " +
             $"Indices={meshIndexArenaCapacity} " +
-            $"Hash={meshVertexHashCapacity}"
+            "Mode=GPU Marching Cubes + Transvoxel"
         );
 
         LogDebug(
@@ -632,7 +609,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         DispatchRebuildActiveLeaves();
 
         DispatchBuildNeighborTopology();
-        DispatchBuildTransitionTopology();
 
         DispatchBuildLeafMesh();
         densityMeshRebuildRequested = false;
@@ -707,11 +683,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
                 "CSBuildNeighborTopology"
             );
 
-        buildTransitionTopologyKernel =
-            voxelDensityShader.FindKernel(
-                "CSBuildTransitionTopology"
-            );
-
         resetActiveLeavesKernel =
             voxelDensityShader.FindKernel(
                 "CSResetActiveLeaves"
@@ -740,36 +711,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         buildVerticesKernel =
             voxelDensityShader.FindKernel(
                 "CSBuildVertices"
-            );
-
-        countLeafMeshIndicesKernel =
-            voxelDensityShader.FindKernel(
-                "CSCountLeafMeshIndices"
-            );
-
-        scanLeafMeshIndexOffsetsKernel =
-            voxelDensityShader.FindKernel(
-                "CSScanLeafMeshIndexOffsets"
-            );
-
-        buildXFacesKernel =
-            voxelDensityShader.FindKernel(
-                "CSBuildXFaces"
-            );
-
-        buildYFacesKernel =
-            voxelDensityShader.FindKernel(
-                "CSBuildYFaces"
-            );
-
-        buildZFacesKernel =
-            voxelDensityShader.FindKernel(
-                "CSBuildZFaces"
-            );
-
-        buildLeafBoundaryFacesKernel =
-            voxelDensityShader.FindKernel(
-                "CSBuildLeafBoundaryFaces"
             );
 
         finalizeLeafMeshKernel =
@@ -810,12 +751,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
             ACTIVE_LEAF_NEIGHBOR_TOPOLOGY_STRIDE
         );
 
-        activeLeafTransitionTopologyBuffer = new GraphicsBuffer(
-            GraphicsBuffer.Target.Structured,
-            maxOctreeNodes,
-            ACTIVE_LEAF_TRANSITION_TOPOLOGY_STRIDE
-        );
-
         activeLeafMeshSlotBuffer = new GraphicsBuffer(
             GraphicsBuffer.Target.Structured,
             maxOctreeNodes,
@@ -831,24 +766,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         activeLeafMeshVertexCounterBuffer = new GraphicsBuffer(
             GraphicsBuffer.Target.Structured,
             maxActiveLeaves,
-            UINT_STRIDE
-        );
-
-        activeLeafMeshIndexCounterBuffer = new GraphicsBuffer(
-            GraphicsBuffer.Target.Structured,
-            maxActiveLeaves,
-            UINT_STRIDE
-        );
-
-        activeLeafMeshVertexHashKeyBuffer = new GraphicsBuffer(
-            GraphicsBuffer.Target.Structured,
-            meshVertexHashCapacity,
-            UINT_STRIDE
-        );
-
-        activeLeafMeshVertexHashValueBuffer = new GraphicsBuffer(
-            GraphicsBuffer.Target.Structured,
-            meshVertexHashCapacity,
             UINT_STRIDE
         );
 
@@ -906,12 +823,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
             sizeof(float) * 3
         );
 
-        vertexValidBuffer = new GraphicsBuffer(
-            GraphicsBuffer.Target.Structured,
-            meshVertexArenaCapacity,
-            UINT_STRIDE
-        );
-
         vertexCountBuffer = new GraphicsBuffer(
             GraphicsBuffer.Target.Structured,
             1,
@@ -935,6 +846,24 @@ public class VoxelGpuHierarchy : MonoBehaviour
             DENSITY_EDIT_CAPACITY,
             DENSITY_EDIT_STRIDE
         );
+
+        regularCellClassTableBuffer = CreateLookupTable(VoxelTransvoxelTables.RegularCellClass);
+        regularCellDataTableBuffer = CreateLookupTable(VoxelTransvoxelTables.RegularCellData);
+        regularVertexDataTableBuffer = CreateLookupTable(VoxelTransvoxelTables.RegularVertexData);
+        transitionCellClassTableBuffer = CreateLookupTable(VoxelTransvoxelTables.TransitionCellClass);
+        transitionCellDataTableBuffer = CreateLookupTable(VoxelTransvoxelTables.TransitionCellData);
+        transitionVertexDataTableBuffer = CreateLookupTable(VoxelTransvoxelTables.TransitionVertexData);
+    }
+
+    private static GraphicsBuffer CreateLookupTable(uint[] values)
+    {
+        var buffer = new GraphicsBuffer(
+            GraphicsBuffer.Target.Structured,
+            values.Length,
+            sizeof(uint)
+        );
+        buffer.SetData(values);
+        return buffer;
     }
 
     private void SetShaderParameters(
@@ -1042,10 +971,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
             meshIndexArenaCapacity
         );
 
-        voxelDensityShader.SetInt(
-            "MeshVertexHashCapacity",
-            meshVertexHashCapacity
-        );
     }
 
     private void BindAllBuffers()
@@ -1055,30 +980,15 @@ public class VoxelGpuHierarchy : MonoBehaviour
         BindCommonBuffers(balanceOctree2To1Kernel);
         BindCommonBuffers(applyLodRequestsKernel);
         BindCommonBuffers(applyMergeRequestsKernel);
-
         BindCommonBuffers(buildNeighborLodKernel);
         BindCommonBuffers(buildNeighborTopologyKernel);
-        BindCommonBuffers(buildTransitionTopologyKernel);
-
         BindCommonBuffers(resetActiveLeavesKernel);
         BindCommonBuffers(rebuildActiveLeavesKernel);
-
         BindCommonBuffers(resetLeafMeshKernel);
         BindCommonBuffers(countLeafMeshVerticesKernel);
         BindCommonBuffers(scanLeafMeshVertexOffsetsKernel);
         BindCommonBuffers(buildVerticesKernel);
-
-        BindCommonBuffers(countLeafMeshIndicesKernel);
-        BindCommonBuffers(scanLeafMeshIndexOffsetsKernel);
-
-        BindCommonBuffers(buildXFacesKernel);
-        BindCommonBuffers(buildYFacesKernel);
-        BindCommonBuffers(buildZFacesKernel);
-
-        BindCommonBuffers(buildLeafBoundaryFacesKernel);
-
         BindCommonBuffers(finalizeLeafMeshKernel);
-
         BindCommonBuffers(resetLodStatsKernel);
         BindCommonBuffers(calculateLodStatsKernel);
 
@@ -1086,98 +996,27 @@ public class VoxelGpuHierarchy : MonoBehaviour
         BindLeafMeshBuffers(countLeafMeshVerticesKernel);
         BindLeafMeshBuffers(scanLeafMeshVertexOffsetsKernel);
         BindLeafMeshBuffers(buildVerticesKernel);
-
-        BindLeafMeshBuffers(countLeafMeshIndicesKernel);
-        BindLeafMeshBuffers(scanLeafMeshIndexOffsetsKernel);
-
-        BindLeafMeshBuffers(buildXFacesKernel);
-        BindLeafMeshBuffers(buildYFacesKernel);
-        BindLeafMeshBuffers(buildZFacesKernel);
-
-        BindLeafMeshBuffers(buildLeafBoundaryFacesKernel);
-
         BindLeafMeshBuffers(finalizeLeafMeshKernel);
 
         BindMeshReadOnlyBuffers(
             countLeafMeshVerticesKernel,
             false,
-            false,
-            false
+            true
         );
         BindMeshReadOnlyBuffers(
             scanLeafMeshVertexOffsetsKernel,
-            false,
-            false,
-            false
-        );
-        BindMeshReadOnlyBuffers(
-            scanLeafMeshIndexOffsetsKernel,
-            false,
             false,
             false
         );
         BindMeshReadOnlyBuffers(
             buildVerticesKernel,
             true,
-            false,
-            false
-        );
-        BindMeshReadOnlyBuffers(
-            countLeafMeshIndicesKernel,
-            true,
-            true,
-            true
-        );
-        BindMeshReadOnlyBuffers(
-            buildXFacesKernel,
-            true,
-            true,
-            false
-        );
-        BindMeshReadOnlyBuffers(
-            buildYFacesKernel,
-            true,
-            true,
-            false
-        );
-        BindMeshReadOnlyBuffers(
-            buildZFacesKernel,
-            true,
-            true,
-            false
-        );
-        BindMeshReadOnlyBuffers(
-            buildLeafBoundaryFacesKernel,
-            true,
-            true,
             true
         );
         BindMeshReadOnlyBuffers(
             finalizeLeafMeshKernel,
             false,
-            false,
             false
-        );
-
-        voxelDensityShader.SetBuffer(
-            countLeafMeshIndicesKernel,
-            "ActiveLeafMeshSlotReadBuffer",
-            activeLeafMeshSlotBuffer
-        );
-        voxelDensityShader.SetBuffer(
-            buildXFacesKernel,
-            "ActiveLeafMeshSlotReadBuffer",
-            activeLeafMeshSlotBuffer
-        );
-        voxelDensityShader.SetBuffer(
-            buildYFacesKernel,
-            "ActiveLeafMeshSlotReadBuffer",
-            activeLeafMeshSlotBuffer
-        );
-        voxelDensityShader.SetBuffer(
-            buildZFacesKernel,
-            "ActiveLeafMeshSlotReadBuffer",
-            activeLeafMeshSlotBuffer
         );
 
         voxelDensityShader.SetBuffer(
@@ -1185,56 +1024,16 @@ public class VoxelGpuHierarchy : MonoBehaviour
             "ActiveLeafNeighborTopologyBuffer",
             activeLeafNeighborTopologyBuffer
         );
-
-        voxelDensityShader.SetBuffer(
-            buildTransitionTopologyKernel,
-            "ActiveLeafNeighborTopologyBuffer",
-            activeLeafNeighborTopologyBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            buildTransitionTopologyKernel,
-            "ActiveLeafTransitionTopologyBuffer",
-            activeLeafTransitionTopologyBuffer
-        );
-
         voxelDensityShader.SetBuffer(
             rebuildActiveLeavesKernel,
             "ActiveLeafMeshSlotBuffer",
             activeLeafMeshSlotBuffer
         );
-
-        voxelDensityShader.SetBuffer(
-            countLeafMeshIndicesKernel,
-            "ActiveLeafMeshSlotBuffer",
-            activeLeafMeshSlotBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            countLeafMeshIndicesKernel,
-            "ActiveLeafNeighborTopologyBuffer",
-            activeLeafNeighborTopologyBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            buildLeafBoundaryFacesKernel,
-            "ActiveLeafMeshSlotBuffer",
-            activeLeafMeshSlotBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            buildLeafBoundaryFacesKernel,
-            "ActiveLeafNeighborTopologyBuffer",
-            activeLeafNeighborTopologyBuffer
-        );
-
         BindDensityEditBuffer(countLeafMeshVerticesKernel);
         BindDensityEditBuffer(buildVerticesKernel);
-        BindDensityEditBuffer(countLeafMeshIndicesKernel);
-        BindDensityEditBuffer(buildXFacesKernel);
-        BindDensityEditBuffer(buildYFacesKernel);
-        BindDensityEditBuffer(buildZFacesKernel);
-        BindDensityEditBuffer(buildLeafBoundaryFacesKernel);
+
+        BindMeshTableBuffers(countLeafMeshVerticesKernel);
+        BindMeshTableBuffers(buildVerticesKernel);
     }
 
     private void BindDensityEditBuffer(int kernel)
@@ -1244,6 +1043,16 @@ public class VoxelGpuHierarchy : MonoBehaviour
             "DensityEditBuffer",
             densityEditBuffer
         );
+    }
+
+    private void BindMeshTableBuffers(int kernel)
+    {
+        voxelDensityShader.SetBuffer(kernel, "RegularCellClassTable", regularCellClassTableBuffer);
+        voxelDensityShader.SetBuffer(kernel, "RegularCellDataTable", regularCellDataTableBuffer);
+        voxelDensityShader.SetBuffer(kernel, "RegularVertexDataTable", regularVertexDataTableBuffer);
+        voxelDensityShader.SetBuffer(kernel, "TransitionCellClassTable", transitionCellClassTableBuffer);
+        voxelDensityShader.SetBuffer(kernel, "TransitionCellDataTable", transitionCellDataTableBuffer);
+        voxelDensityShader.SetBuffer(kernel, "TransitionVertexDataTable", transitionVertexDataTableBuffer);
     }
 
     private void BindLeafMeshBuffers(
@@ -1264,24 +1073,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
         voxelDensityShader.SetBuffer(
             kernel,
-            "ActiveLeafMeshIndexCounterBuffer",
-            activeLeafMeshIndexCounterBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            kernel,
-            "ActiveLeafMeshVertexHashKeyBuffer",
-            activeLeafMeshVertexHashKeyBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            kernel,
-            "ActiveLeafMeshVertexHashValueBuffer",
-            activeLeafMeshVertexHashValueBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            kernel,
             "MeshOverflowFlagsBuffer",
             meshOverflowFlagsBuffer
         );
@@ -1290,7 +1081,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
     private void BindMeshReadOnlyBuffers(
         int kernel,
         bool bindMeshInfo,
-        bool bindVertexHash,
         bool bindBoundaryTopology
     )
     {
@@ -1321,29 +1111,8 @@ public class VoxelGpuHierarchy : MonoBehaviour
             );
         }
 
-        if (bindVertexHash)
-        {
-            voxelDensityShader.SetBuffer(
-                kernel,
-                "ActiveLeafMeshVertexHashKeyReadBuffer",
-                activeLeafMeshVertexHashKeyBuffer
-            );
-
-            voxelDensityShader.SetBuffer(
-                kernel,
-                "ActiveLeafMeshVertexHashValueReadBuffer",
-                activeLeafMeshVertexHashValueBuffer
-            );
-        }
-
         if (bindBoundaryTopology)
         {
-            voxelDensityShader.SetBuffer(
-                kernel,
-                "ActiveLeafMeshSlotReadBuffer",
-                activeLeafMeshSlotBuffer
-            );
-
             voxelDensityShader.SetBuffer(
                 kernel,
                 "ActiveLeafNeighborTopologyReadBuffer",
@@ -1414,12 +1183,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
             kernel,
             "NormalBuffer",
             normalBuffer
-        );
-
-        voxelDensityShader.SetBuffer(
-            kernel,
-            "VertexValid",
-            vertexValidBuffer
         );
 
         voxelDensityShader.SetBuffer(
@@ -1574,25 +1337,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         );
     }
 
-    private void DispatchBuildTransitionTopology()
-    {
-        int groups =
-            Mathf.Max(
-                1,
-                Mathf.CeilToInt(
-                    maxOctreeNodes /
-                    (float)THREADS
-                )
-            );
-
-        voxelDensityShader.Dispatch(
-            buildTransitionTopologyKernel,
-            groups,
-            1,
-            1
-        );
-    }
-
     private void DispatchResetActiveLeaves()
     {
         voxelDensityShader.Dispatch(
@@ -1631,19 +1375,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
         DispatchScanLeafMeshVertexOffsets();
 
         DispatchBuildVertices();
-
-        DispatchCountLeafMeshIndices();
-
-        DispatchScanLeafMeshIndexOffsets();
-
-        DispatchBuildXFaces();
-
-        DispatchBuildYFaces();
-
-        DispatchBuildZFaces();
-
-        DispatchBuildLeafBoundaryFaces();
-
         DispatchFinalizeLeafMesh();
 
         unchecked
@@ -1654,18 +1385,13 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
     private void DispatchResetLeafMesh()
     {
-        int resetItemCount =
-            Mathf.Max(
-                maxActiveLeaves,
-                meshVertexHashCapacity
-            );
+        int resetItemCount = maxActiveLeaves;
 
         int groups =
             Mathf.Max(
                 1,
                 Mathf.CeilToInt(
-                    resetItemCount /
-                    (float)THREADS
+                    resetItemCount / 128.0f
                 )
             );
 
@@ -1725,51 +1451,6 @@ public class VoxelGpuHierarchy : MonoBehaviour
     {
         DispatchLeafMeshPerLeaf(
             buildVerticesKernel
-        );
-    }
-
-    private void DispatchCountLeafMeshIndices()
-    {
-        DispatchLeafMeshPerLeaf(
-            countLeafMeshIndicesKernel
-        );
-    }
-
-    private void DispatchScanLeafMeshIndexOffsets()
-    {
-        voxelDensityShader.Dispatch(
-            scanLeafMeshIndexOffsetsKernel,
-            1,
-            1,
-            1
-        );
-    }
-
-    private void DispatchBuildXFaces()
-    {
-        DispatchLeafMeshPerLeaf(
-            buildXFacesKernel
-        );
-    }
-
-    private void DispatchBuildYFaces()
-    {
-        DispatchLeafMeshPerLeaf(
-            buildYFacesKernel
-        );
-    }
-
-    private void DispatchBuildZFaces()
-    {
-        DispatchLeafMeshPerLeaf(
-            buildZFacesKernel
-        );
-    }
-
-    private void DispatchBuildLeafBoundaryFaces()
-    {
-        DispatchLeafMeshPerLeaf(
-            buildLeafBoundaryFacesKernel
         );
     }
 
@@ -2206,14 +1887,10 @@ public class VoxelGpuHierarchy : MonoBehaviour
         ReleaseBuffer(ref octreeNodeBuffer);
         ReleaseBuffer(ref activeLeafBuffer);
         ReleaseBuffer(ref activeLeafNeighborTopologyBuffer);
-        ReleaseBuffer(ref activeLeafTransitionTopologyBuffer);
         ReleaseBuffer(ref activeLeafMeshSlotBuffer);
 
         ReleaseBuffer(ref activeLeafMeshInfoBuffer);
         ReleaseBuffer(ref activeLeafMeshVertexCounterBuffer);
-        ReleaseBuffer(ref activeLeafMeshIndexCounterBuffer);
-        ReleaseBuffer(ref activeLeafMeshVertexHashKeyBuffer);
-        ReleaseBuffer(ref activeLeafMeshVertexHashValueBuffer);
         ReleaseBuffer(ref meshOverflowFlagsBuffer);
 
         ReleaseBuffer(ref octreeFreeNodeStack);
@@ -2225,11 +1902,16 @@ public class VoxelGpuHierarchy : MonoBehaviour
 
         ReleaseBuffer(ref vertexBuffer);
         ReleaseBuffer(ref normalBuffer);
-        ReleaseBuffer(ref vertexValidBuffer);
         ReleaseBuffer(ref vertexCountBuffer);
         ReleaseBuffer(ref indexBuffer);
         ReleaseBuffer(ref indexCountBuffer);
         ReleaseBuffer(ref densityEditBuffer);
+        ReleaseBuffer(ref regularCellClassTableBuffer);
+        ReleaseBuffer(ref regularCellDataTableBuffer);
+        ReleaseBuffer(ref regularVertexDataTableBuffer);
+        ReleaseBuffer(ref transitionCellClassTableBuffer);
+        ReleaseBuffer(ref transitionCellDataTableBuffer);
+        ReleaseBuffer(ref transitionVertexDataTableBuffer);
     }
 
     private void ReleaseBuffer(
